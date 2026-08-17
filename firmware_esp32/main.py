@@ -10,9 +10,8 @@ Comportement :
 
 from machine import Pin, I2C, PWM
 import time
-
 from fall_detector import FallDetector, calculate_vector_magnitude
-
+from ble_server import BleServer
 # --- Configuration pins ---
 SCL_PIN = 7
 SDA_PIN = 6
@@ -76,7 +75,14 @@ MODE_ALARME = 1
 MODE_PAUSE = 2
 NOMS_MODE = {0: "SURVEILLANCE", 1: "ALARME", 2: "PAUSE"}
 
+def gerer_commande_ble(commande):
+    if commande == "TEST_BUZZER":
+        buzzer_on()
+        time.sleep_ms(300)
+        buzzer_off()
+
 detecteur = FallDetector(fenetre_ms=500)
+ble = BleServer(sur_commande=gerer_commande_ble)
 mode = MODE_SURVEILLANCE
 debut_pause = None
 etat_bouton_precedent = 1
@@ -127,7 +133,7 @@ while True:
             print("!!! CHUTE DETECTEE !!! Declenchement de l'alarme.")
             buzzer_on()
             mode = MODE_ALARME
-
+            ble.notifier_chute()
     elif mode == MODE_PAUSE:
         if time.ticks_diff(maintenant, debut_pause) >= PAUSE_APRES_ARRET_MS:
             mode = MODE_SURVEILLANCE
