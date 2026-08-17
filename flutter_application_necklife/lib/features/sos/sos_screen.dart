@@ -21,7 +21,7 @@ class SosScreen extends StatefulWidget {
 
 class _SosScreenState extends State<SosScreen> {
   bool _sosEnCours = false;
-  final BleManager _bleManager = BleManager();
+  final BleManager _bleManager = BleManager.instance;
   final LocationService _locationService = LocationService();
 
   // Numéro d'urgence par défaut, utilisé tant qu'aucun n'est configuré
@@ -208,12 +208,6 @@ class _SosScreenState extends State<SosScreen> {
         ),
       );
     }
-  }
-
-  @override
-  void dispose() {
-    _bleManager.dispose();
-    super.dispose();
   }
 
   @override

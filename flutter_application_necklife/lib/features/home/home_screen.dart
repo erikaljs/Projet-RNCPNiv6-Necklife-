@@ -12,6 +12,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/auth/link_code_service.dart';
@@ -27,7 +28,7 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  final BleManager _bleManager = BleManager();
+  final BleManager _bleManager = BleManager.instance;
   final LinkCodeService _linkCodeService = LinkCodeService();
   final LocationService _locationService = LocationService();
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
@@ -62,7 +63,6 @@ class _HomeScreenState extends State<HomeScreen> {
     _subscriptionAlertes?.cancel();
     _subscriptionBalayage?.cancel();
     _subscriptionDemandes?.cancel();
-    _bleManager.dispose();
     super.dispose();
   }
 
@@ -81,6 +81,20 @@ class _HomeScreenState extends State<HomeScreen> {
   // Démarre le balayage BLE et écoute les appareils trouvés
   // ---------------------------------------------------------------------------
   Future<void> _demarrerAssociation() async {
+    final statuts = await [
+      Permission.bluetoothScan,
+      Permission.bluetoothConnect,
+    ].request();
+
+    if (statuts.values.any((s) => !s.isGranted)) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Permissions Bluetooth refusées.')),
+        );
+      }
+      return;
+    }
+
     setState(() {
       _balayageEnCours = true;
       _appareilsTrouves = [];
@@ -186,9 +200,7 @@ class _HomeScreenState extends State<HomeScreen> {
       if (_demandesAffichees.contains(doc.id)) continue;
       _demandesAffichees.add(doc.id);
 
-      final followerUid = doc.data()['followerUid'] as String;
-      final demandeurDoc = await _firestore.collection('users').doc(followerUid).get();
-      final nomDemandeur = demandeurDoc.data()?['nom'] as String? ?? 'Un proche';
+      final nomDemandeur = doc.data()['followerNom'] as String? ?? 'Un proche';
 
       if (!mounted) return;
       showDialog(
@@ -274,7 +286,12 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
-    await _linkCodeService.creerDemande(followerUid: monUid, followedUid: followedUid);
+    final monNom = FirebaseAuth.instance.currentUser?.displayName ?? 'Un proche';
+    await _linkCodeService.creerDemande(
+      followerUid: monUid,
+      followedUid: followedUid,
+      followerNom: monNom,
+    );
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Demande envoyée.')),

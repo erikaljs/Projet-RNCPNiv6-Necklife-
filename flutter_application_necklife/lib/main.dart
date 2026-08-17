@@ -127,7 +127,7 @@ class _RacineNavigationState extends State<RacineNavigation> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: _ecrans[_indexOnglet],
+      body: IndexedStack(index: _indexOnglet, children: _ecrans),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _indexOnglet,
         onDestinationSelected: (index) => setState(() => _indexOnglet = index),

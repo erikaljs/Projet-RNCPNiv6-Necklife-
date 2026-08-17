@@ -67,10 +67,12 @@ class LinkCodeService {
   Future<void> creerDemande({
     required String followerUid,
     required String followedUid,
+    required String followerNom,
   }) async {
     await _firestore.collection('links').doc('${followerUid}_$followedUid').set({
       'followerUid': followerUid,
       'followedUid': followedUid,
+      'followerNom': followerNom,
       'status': 'pending',
       'createdAt': FieldValue.serverTimestamp(),
     });

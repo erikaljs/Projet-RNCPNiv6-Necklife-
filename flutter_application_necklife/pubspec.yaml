@@ -36,6 +36,9 @@ dependencies:
   # BLE — communication avec le collier ESP32
   flutter_blue_plus: ^1.35.3
 
+  # Demande des permissions runtime (BLE, localisation) sur Android 12+
+  permission_handler: ^11.3.1
+
   # Firebase — authentification et base de données
   firebase_core: ^3.13.1
   firebase_auth: ^5.5.3

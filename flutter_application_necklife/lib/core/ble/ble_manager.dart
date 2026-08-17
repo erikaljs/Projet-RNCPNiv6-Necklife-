@@ -16,6 +16,13 @@ const String uuidCaracCommandes  = "12345678-1234-1234-1234-123456789abe";
 const String nomCollier = "NeckLife-Collier";
 
 class BleManager {
+  BleManager._internal();
+
+  // Instance unique partagée pour toute la session utilisateur — la
+  // connexion BLE doit survivre à la navigation entre écrans, seule une
+  // déconnexion explicite (deconnecter()) ou la fermeture de l'app y met fin.
+  static final BleManager instance = BleManager._internal();
+
   // Appareil connecté
   BluetoothDevice? _appareilConnecte;
 
