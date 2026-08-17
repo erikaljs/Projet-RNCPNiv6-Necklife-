@@ -1,0 +1,143 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // -------------------------------------------------------------------------
+    // Fonctions utilitaires
+    // -------------------------------------------------------------------------
+
+    // Vérifie que l'utilisateur est authentifié
+    function estAuthentifie() {
+      return request.auth != null;
+    }
+
+    // Vérifie que l'utilisateur accède à ses propres données
+    function estProprietaire(uid) {
+      return request.auth.uid == uid;
+    }
+
+    // Vérifie que l'utilisateur courant est un contact d'urgence autorisé
+    // pour l'utilisateur cible (son UID figure dans la liste contactsUrgence)
+    function estContactAutorise(uidProprietaire) {
+      let profil = get(/databases/$(database)/documents/users/$(uidProprietaire)).data;
+      return request.auth.uid in profil.contactsUrgenceUids;
+    }
+
+    // Vérifie que l'utilisateur courant suit uidCible via un lien accepté
+    // (collection links, voir link_code_service.dart). L'ID de document est
+    // déterministe ({followerUid}_{followedUid}) précisément pour permettre
+    // cette vérification par exists()/get() sur un chemin connu à l'avance —
+    // Firestore ne permet pas de requêtes filtrées dans les règles.
+    function estSuiviAccepte(uidCible) {
+      let lienId = request.auth.uid + '_' + uidCible;
+      let chemin = /databases/$(database)/documents/links/$(lienId);
+      return exists(chemin) && get(chemin).data.status == 'accepted';
+    }
+
+    // -------------------------------------------------------------------------
+    // Collection : users/{uid}
+    // - Propriétaire : lecture + écriture
+    // - Un proche avec un lien accepté vers ce uid : lecture seule
+    //   (Firestore ne fait pas de sécurité par champ : cette règle autorise
+    //   la lecture du document entier, pas seulement contactsUrgence — c'est
+    //   la seule granularité possible ici. À ce jour le document users ne
+    //   contient pas d'autre donnée plus sensible que l'email/téléphone,
+    //   déjà nécessaires à l'usage normal de l'app par les proches suivis.)
+    // -------------------------------------------------------------------------
+    match /users/{uid} {
+      allow read: if estAuthentifie() && (estProprietaire(uid) || estSuiviAccepte(uid));
+      allow write: if estAuthentifie() && estProprietaire(uid);
+    }
+
+    // -------------------------------------------------------------------------
+    // Collection : devices/{uid}
+    // Un utilisateur ne peut gérer que ses propres appareils (colliers)
+    // -------------------------------------------------------------------------
+    match /devices/{uid} {
+      allow read, write: if estAuthentifie() && estProprietaire(uid);
+    }
+
+    // -------------------------------------------------------------------------
+    // Collection : fallAlerts/{uid}/alertes/{alerteId}
+    // - Propriétaire : lecture + écriture
+    // - Contacts d'urgence autorisés : lecture seule
+    // -------------------------------------------------------------------------
+    match /fallAlerts/{uid}/alertes/{alerteId} {
+      allow read: if estAuthentifie() &&
+                    (estProprietaire(uid) || estContactAutorise(uid));
+      allow write: if estAuthentifie() && estProprietaire(uid);
+    }
+
+    // -------------------------------------------------------------------------
+    // Collection : fallEvents/{eventId}
+    // Événements de chute (SOS manuel ou auto-détecté), voir sos_screen.dart
+    // et home_screen.dart. Peut contenir lat/lng sous consentement (DPIA).
+    // - Propriétaire : lecture + écriture (création, puis labellisation
+    //   chute réelle / fausse alerte depuis imu_screen.dart)
+    // - Un proche avec un lien accepté vers le porteur : lecture seule
+    //   (nécessaire à l'affichage de la localisation côté aidant)
+    // -------------------------------------------------------------------------
+    match /fallEvents/{eventId} {
+      allow read: if estAuthentifie() &&
+                    (resource.data.uid == request.auth.uid || estSuiviAccepte(resource.data.uid));
+      allow create: if estAuthentifie() && request.resource.data.uid == request.auth.uid;
+      allow update: if estAuthentifie() && resource.data.uid == request.auth.uid;
+    }
+
+    // -------------------------------------------------------------------------
+    // Collection : links/{linkId}
+    // Relations de suivi utilisateur/proche (voir link_code_service.dart).
+    // ID déterministe {followerUid}_{followedUid}.
+    // - Les deux parties du lien (follower et followed) peuvent le lire
+    // - Seul le follower peut créer une demande, à l'état 'pending', pour
+    //   lui-même
+    // - Seul le followed peut l'accepter (passage à 'accepted') ou la
+    //   supprimer (refus)
+    // -------------------------------------------------------------------------
+    match /links/{linkId} {
+      allow read: if estAuthentifie() &&
+                    (resource.data.followerUid == request.auth.uid ||
+                     resource.data.followedUid == request.auth.uid);
+
+      allow create: if estAuthentifie() &&
+                      request.resource.data.followerUid == request.auth.uid &&
+                      request.resource.data.status == 'pending';
+
+      allow update: if estAuthentifie() &&
+                      resource.data.followedUid == request.auth.uid &&
+                      request.resource.data.status == 'accepted';
+
+      allow delete: if estAuthentifie() && resource.data.followedUid == request.auth.uid;
+    }
+
+    // -------------------------------------------------------------------------
+    // Collection : linkCodes/{code}
+    // Répertoire code -> uid (voir link_code_service.dart). La lecture doit
+    // être ouverte à tout utilisateur authentifié : un proche doit pouvoir
+    // vérifier le code de la personne qu'il souhaite suivre, sans lien
+    // préexistant avec elle.
+    // -------------------------------------------------------------------------
+    match /linkCodes/{code} {
+      allow read: if estAuthentifie();
+      allow create: if estAuthentifie() && request.resource.data.uid == request.auth.uid;
+      allow delete: if estAuthentifie() && resource.data.uid == request.auth.uid;
+    }
+
+    // -------------------------------------------------------------------------
+    // Collection : wellbeingEntries/{uid}/entrees/{entreeId}
+    // Données du quiz bien-être — privées, accès propriétaire uniquement
+    // -------------------------------------------------------------------------
+    match /wellbeingEntries/{uid}/entrees/{entreeId} {
+      allow read, write: if estAuthentifie() && estProprietaire(uid);
+    }
+
+    // -------------------------------------------------------------------------
+    // Règle de sécurité par défaut : bloquer tout accès non explicitement autorisé
+    // -------------------------------------------------------------------------
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+  }
+}
