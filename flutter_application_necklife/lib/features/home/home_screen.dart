@@ -459,6 +459,7 @@ class _CarteProcheState extends State<_CarteProche> {
 
   bool _etendu = false;
   Future<({double lat, double lng})?>? _futurePosition;
+  Future<List<QueryDocumentSnapshot<Map<String, dynamic>>>>? _futureHistorique;
 
   // ---------------------------------------------------------------------------
   // Cherche le fallEvent le plus récent (<72h) de ce proche contenant une
@@ -487,11 +488,95 @@ class _CarteProcheState extends State<_CarteProche> {
     return null;
   }
 
+  // ---------------------------------------------------------------------------
+  // Historique des chutes (<72h) de ce proche, triées par date décroissante —
+  // même requête que _ImuScreenState dans imu_screen.dart, mais sur l'uid du
+  // proche plutôt que celui de l'utilisateur connecté
+  // ---------------------------------------------------------------------------
+  Future<List<QueryDocumentSnapshot<Map<String, dynamic>>>> _chercherHistoriqueChutes() async {
+    final procheUid = widget.proche['uid'] as String;
+    final depuis = DateTime.now().subtract(const Duration(hours: 72));
+
+    final snap = await _firestore
+        .collection('fallEvents')
+        .where('uid', isEqualTo: procheUid)
+        .where('timestamp', isGreaterThan: Timestamp.fromDate(depuis))
+        .orderBy('timestamp', descending: true)
+        .get();
+
+    return snap.docs;
+  }
+
+  String _formaterDate(DateTime dt) {
+    String deuxChiffres(int n) => n.toString().padLeft(2, '0');
+    return '${deuxChiffres(dt.day)}/${deuxChiffres(dt.month)} '
+        '${deuxChiffres(dt.hour)}:${deuxChiffres(dt.minute)}';
+  }
+
   void _basculerExpansion() {
     setState(() {
       _etendu = !_etendu;
       _futurePosition ??= _chercherDernierePosition();
+      _futureHistorique ??= _chercherHistoriqueChutes();
     });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Une ligne de l'historique de chutes du proche, en lecture seule — pas de
+  // boutons de labellisation ici : cette action reste réservée au propriétaire
+  // du collier lui-même, depuis imu_screen.dart
+  // ---------------------------------------------------------------------------
+  Widget _carteEvenementHistorique(QueryDocumentSnapshot<Map<String, dynamic>> doc) {
+    final data = doc.data();
+    final timestamp = (data['timestamp'] as Timestamp?)?.toDate();
+    final imuPeakG = data['imuPeakG'] as num?;
+    final statut = data['statut'] as String? ?? 'en_attente';
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  timestamp != null ? _formaterDate(timestamp) : 'Date inconnue',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+                if (imuPeakG != null) Text('Pic IMU : ${imuPeakG.toStringAsFixed(2)} g'),
+              ],
+            ),
+          ),
+          _badgeStatut(statut),
+        ],
+      ),
+    );
+  }
+
+  Widget _badgeStatut(String statut) {
+    Color couleur;
+    String libelle;
+    switch (statut) {
+      case 'chute_reelle':
+        couleur = Colors.red;
+        libelle = 'Chute réelle';
+        break;
+      case 'fausse_alerte':
+        couleur = Colors.grey;
+        libelle = 'Fausse alerte';
+        break;
+      default:
+        couleur = Colors.orange;
+        libelle = 'En attente';
+    }
+    return Chip(
+      label: Text(libelle, style: const TextStyle(color: Colors.white, fontSize: 12)),
+      backgroundColor: couleur,
+      padding: EdgeInsets.zero,
+      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -613,9 +698,26 @@ class _CarteProcheState extends State<_CarteProche> {
                   const SizedBox(height: 12),
                   const Text('Historique de chutes', style: TextStyle(fontWeight: FontWeight.bold)),
                   const SizedBox(height: 4),
-                  const Text(
-                    'Aucun historique disponible pour l\'instant.',
-                    style: TextStyle(color: Colors.grey),
+                  FutureBuilder<List<QueryDocumentSnapshot<Map<String, dynamic>>>>(
+                    future: _futureHistorique,
+                    builder: (context, snapshot) {
+                      if (snapshot.connectionState == ConnectionState.waiting) {
+                        return const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 8),
+                          child: Center(child: CircularProgressIndicator()),
+                        );
+                      }
+                      final docs = snapshot.data ?? [];
+                      if (docs.isEmpty) {
+                        return const Text(
+                          'Aucune chute enregistrée sur les 72 dernières heures.',
+                          style: TextStyle(color: Colors.grey),
+                        );
+                      }
+                      return Column(
+                        children: docs.map(_carteEvenementHistorique).toList(),
+                      );
+                    },
                   ),
                   const SizedBox(height: 12),
                   const Text('Contacts d\'urgence', style: TextStyle(fontWeight: FontWeight.bold)),
