@@ -1,0 +1,7 @@
+.pio/
+*.pyc
+__pycache__/
+node_modules/
+.dart_tool/
+build/
+.env
