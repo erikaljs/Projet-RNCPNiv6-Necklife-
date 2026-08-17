@@ -23,7 +23,7 @@ class _ImuScreenState extends State<ImuScreen> {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
   // Historique des 50 dernières magnitudes IMU pour la courbe
-  final List<double> _historiqueImu = List.filled(50, 1.0);
+  final List<double> _historiqueImu = List.filled(50, 1.0, growable: true);
 
   // TODO: le firmware ESP32 ne diffuse pour l'instant qu'une notification
   // BLE discrète "CHUTE_DETECTEE" (voir ble_manager.dart), pas un flux IMU
