@@ -2,7 +2,7 @@ import 'package:dio/dio.dart';
 import '../auth/auth_service.dart';
 
 // URL de base du backend — remplacer par l'URL Firebase Functions réelle
-const String URL_API_BASE = "https://YOUR_PROJECT_ID.cloudfunctions.net/api";
+const String urlApiBase = "https://YOUR_PROJECT_ID.cloudfunctions.net/api";
 
 class ApiClient {
   late final Dio _dio;
@@ -10,7 +10,7 @@ class ApiClient {
 
   ApiClient(this._authService) {
     _dio = Dio(BaseOptions(
-      baseUrl: URL_API_BASE,
+      baseUrl: urlApiBase,
       connectTimeout: const Duration(seconds: 10),
       receiveTimeout: const Duration(seconds: 15),
       headers: {'Content-Type': 'application/json'},

@@ -26,9 +26,6 @@ class BleManager {
   // Appareil connecté
   BluetoothDevice? _appareilConnecte;
 
-  // Caractéristique de notification d'alerte (NOTIFY)
-  BluetoothCharacteristic? _caracAlerte;
-
   // Caractéristique de commandes envoyées au collier (WRITE)
   BluetoothCharacteristic? _caracCommandes;
 
@@ -105,7 +102,6 @@ class BleManager {
       if (service.serviceUuid == Guid(uuidServiceNecklife)) {
         for (final carac in service.characteristics) {
           if (carac.characteristicUuid == Guid(uuidCaracAlerte)) {
-            _caracAlerte = carac;
             // Activation des notifications BLE pour recevoir les alertes de chute
             await carac.setNotifyValue(true);
             carac.lastValueStream.listen(_traiterNotification);
@@ -122,7 +118,6 @@ class BleManager {
     appareil.connectionState.listen((etat) {
       if (etat == BluetoothConnectionState.disconnected) {
         _appareilConnecte = null;
-        _caracAlerte = null;
         _caracCommandes = null;
       }
     });
@@ -156,7 +151,6 @@ class BleManager {
   Future<void> deconnecter() async {
     await _appareilConnecte?.disconnect();
     _appareilConnecte = null;
-    _caracAlerte = null;
     _caracCommandes = null;
   }
 
