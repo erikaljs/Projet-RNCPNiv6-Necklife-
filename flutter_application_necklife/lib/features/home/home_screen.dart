@@ -458,53 +458,53 @@ class _CarteProcheState extends State<_CarteProche> {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
   bool _etendu = false;
-  Future<({double lat, double lng})?>? _futurePosition;
-  Future<List<QueryDocumentSnapshot<Map<String, dynamic>>>>? _futureHistorique;
+  Stream<({double lat, double lng})?>? _streamPosition;
+  Stream<List<QueryDocumentSnapshot<Map<String, dynamic>>>>? _streamHistorique;
 
   // ---------------------------------------------------------------------------
-  // Cherche le fallEvent le plus récent (<72h) de ce proche contenant une
+  // Écoute le fallEvent le plus récent (<72h) de ce proche contenant une
   // position — lat/lng ne sont présents que si le proche avait consenti au
   // partage au moment de l'alerte
   // ---------------------------------------------------------------------------
-  Future<({double lat, double lng})?> _chercherDernierePosition() async {
+  Stream<({double lat, double lng})?> _ecouterDernierePosition() {
     final procheUid = widget.proche['uid'] as String;
     final depuis = DateTime.now().subtract(const Duration(hours: 72));
 
-    final snap = await _firestore
+    return _firestore
         .collection('fallEvents')
         .where('uid', isEqualTo: procheUid)
         .where('timestamp', isGreaterThan: Timestamp.fromDate(depuis))
         .orderBy('timestamp', descending: true)
-        .get();
-
-    for (final doc in snap.docs) {
-      final data = doc.data();
-      final lat = data['lat'] as num?;
-      final lng = data['lng'] as num?;
-      if (lat != null && lng != null) {
-        return (lat: lat.toDouble(), lng: lng.toDouble());
+        .snapshots()
+        .map((snap) {
+      for (final doc in snap.docs) {
+        final data = doc.data();
+        final lat = data['lat'] as num?;
+        final lng = data['lng'] as num?;
+        if (lat != null && lng != null) {
+          return (lat: lat.toDouble(), lng: lng.toDouble());
+        }
       }
-    }
-    return null;
+      return null;
+    });
   }
 
   // ---------------------------------------------------------------------------
-  // Historique des chutes (<72h) de ce proche, triées par date décroissante —
-  // même requête que _ImuScreenState dans imu_screen.dart, mais sur l'uid du
-  // proche plutôt que celui de l'utilisateur connecté
+  // Écoute l'historique des chutes (<72h) de ce proche, triées par date
+  // décroissante — même requête que _ImuScreenState dans imu_screen.dart,
+  // mais sur l'uid du proche plutôt que celui de l'utilisateur connecté
   // ---------------------------------------------------------------------------
-  Future<List<QueryDocumentSnapshot<Map<String, dynamic>>>> _chercherHistoriqueChutes() async {
+  Stream<List<QueryDocumentSnapshot<Map<String, dynamic>>>> _ecouterHistoriqueChutes() {
     final procheUid = widget.proche['uid'] as String;
     final depuis = DateTime.now().subtract(const Duration(hours: 72));
 
-    final snap = await _firestore
+    return _firestore
         .collection('fallEvents')
         .where('uid', isEqualTo: procheUid)
         .where('timestamp', isGreaterThan: Timestamp.fromDate(depuis))
         .orderBy('timestamp', descending: true)
-        .get();
-
-    return snap.docs;
+        .snapshots()
+        .map((snap) => snap.docs);
   }
 
   String _formaterDate(DateTime dt) {
@@ -516,8 +516,13 @@ class _CarteProcheState extends State<_CarteProche> {
   void _basculerExpansion() {
     setState(() {
       _etendu = !_etendu;
-      _futurePosition ??= _chercherDernierePosition();
-      _futureHistorique ??= _chercherHistoriqueChutes();
+      if (_etendu) {
+        _streamPosition = _ecouterDernierePosition();
+        _streamHistorique = _ecouterHistoriqueChutes();
+      } else {
+        _streamPosition = null;
+        _streamHistorique = null;
+      }
     });
   }
 
@@ -650,8 +655,8 @@ class _CarteProcheState extends State<_CarteProche> {
                   const Divider(),
                   const Text('Localisation', style: TextStyle(fontWeight: FontWeight.bold)),
                   const SizedBox(height: 4),
-                  FutureBuilder<({double lat, double lng})?>(
-                    future: _futurePosition,
+                  StreamBuilder<({double lat, double lng})?>(
+                    stream: _streamPosition,
                     builder: (context, snapshot) {
                       if (snapshot.connectionState == ConnectionState.waiting) {
                         return const Padding(
@@ -698,8 +703,8 @@ class _CarteProcheState extends State<_CarteProche> {
                   const SizedBox(height: 12),
                   const Text('Historique de chutes', style: TextStyle(fontWeight: FontWeight.bold)),
                   const SizedBox(height: 4),
-                  FutureBuilder<List<QueryDocumentSnapshot<Map<String, dynamic>>>>(
-                    future: _futureHistorique,
+                  StreamBuilder<List<QueryDocumentSnapshot<Map<String, dynamic>>>>(
+                    stream: _streamHistorique,
                     builder: (context, snapshot) {
                       if (snapshot.connectionState == ConnectionState.waiting) {
                         return const Padding(
