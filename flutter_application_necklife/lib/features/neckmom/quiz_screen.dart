@@ -8,13 +8,13 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 // Structure d'une question du quiz
-class _Question {
+class Question {
   final String texte;
   final List<String> reponses; // 3 réponses possibles
   // Scores associés aux réponses (index 0, 1, 2) — sur une échelle de 0 à 2
   final List<int> scores;
 
-  const _Question({
+  const Question({
     required this.texte,
     required this.reponses,
     required this.scores,
@@ -24,28 +24,28 @@ class _Question {
 // ---------------------------------------------------------------------------
 // 5 questions bien-être adaptées aux seniors et femmes enceintes
 // ---------------------------------------------------------------------------
-const List<_Question> QUESTIONS_QUIZ = [
-  _Question(
+const List<Question> questionsQuiz = [
+  Question(
     texte: 'Comment vous sentez-vous physiquement aujourd\'hui ?',
     reponses: ['Très bien', 'Assez bien', 'Pas bien'],
     scores: [2, 1, 0],
   ),
-  _Question(
+  Question(
     texte: 'Avez-vous bien dormi cette nuit ?',
     reponses: ['Oui, très bien', 'Moyennement', 'Non, mal dormi'],
     scores: [2, 1, 0],
   ),
-  _Question(
+  Question(
     texte: 'Avez-vous pu vous lever et vous déplacer facilement ?',
     reponses: ['Sans difficulté', 'Avec un peu de mal', 'Difficilement'],
     scores: [2, 1, 0],
   ),
-  _Question(
+  Question(
     texte: 'Avez-vous mangé correctement aujourd\'hui ?',
     reponses: ['Oui, normalement', 'Un peu moins que d\'habitude', 'Non, pas d\'appétit'],
     scores: [2, 1, 0],
   ),
-  _Question(
+  Question(
     texte: 'Vous sentez-vous seul(e) ou isolé(e) ?',
     reponses: ['Non, pas du tout', 'Un peu', 'Oui, beaucoup'],
     scores: [2, 1, 0],
@@ -53,7 +53,7 @@ const List<_Question> QUESTIONS_QUIZ = [
 ];
 
 // Seuil d'alerte : score < 4 sur 10 → notification aux aidants
-const int SEUIL_ALERTE_SCORE = 4;
+const int seuilAlerteScore = 4;
 
 class QuizScreen extends StatefulWidget {
   const QuizScreen({super.key});
@@ -76,7 +76,7 @@ class _QuizScreenState extends State<QuizScreen> {
   void _choisirReponse(int score) {
     _reponsesChoisies.add(score);
 
-    if (_indexQuestion < QUESTIONS_QUIZ.length - 1) {
+    if (_indexQuestion < questionsQuiz.length - 1) {
       // Passer à la question suivante
       setState(() => _indexQuestion++);
     } else {
@@ -102,7 +102,7 @@ class _QuizScreenState extends State<QuizScreen> {
 
     await _enregistrerResultat(score);
 
-    if (score < SEUIL_ALERTE_SCORE) {
+    if (score < seuilAlerteScore) {
       await _envoyerAlerteScore(score);
     }
 
@@ -124,7 +124,7 @@ class _QuizScreenState extends State<QuizScreen> {
       'score':     score,
       'reponses':  _reponsesChoisies,
       'timestamp': FieldValue.serverTimestamp(),
-      'alerte':    score < SEUIL_ALERTE_SCORE,
+      'alerte':    score < seuilAlerteScore,
     });
   }
 
@@ -142,7 +142,7 @@ class _QuizScreenState extends State<QuizScreen> {
         .add({
       'type':       'SCORE_BIENETRE_FAIBLE',
       'score':      score,
-      'seuil':      SEUIL_ALERTE_SCORE,
+      'seuil':      seuilAlerteScore,
       'timestamp':  FieldValue.serverTimestamp(),
       'acquittee':  false,
     });
@@ -177,19 +177,19 @@ class _QuizScreenState extends State<QuizScreen> {
   // Affichage d'une question
   // ---------------------------------------------------------------------------
   Widget _construireQuestion() {
-    final question = QUESTIONS_QUIZ[_indexQuestion];
+    final question = questionsQuiz[_indexQuestion];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         // Indicateur de progression
         LinearProgressIndicator(
-          value: (_indexQuestion + 1) / QUESTIONS_QUIZ.length,
+          value: (_indexQuestion + 1) / questionsQuiz.length,
           backgroundColor: Colors.grey[200],
           color: Colors.teal,
         ),
         const SizedBox(height: 8),
         Text(
-          'Question ${_indexQuestion + 1} sur ${QUESTIONS_QUIZ.length}',
+          'Question ${_indexQuestion + 1} sur ${questionsQuiz.length}',
           style: TextStyle(color: Colors.grey[600], fontSize: 12),
         ),
         const SizedBox(height: 32),
@@ -227,7 +227,7 @@ class _QuizScreenState extends State<QuizScreen> {
   // Affichage du résultat
   // ---------------------------------------------------------------------------
   Widget _construireResultat() {
-    final estAlerte = _scoreFinal < SEUIL_ALERTE_SCORE;
+    final estAlerte = _scoreFinal < seuilAlerteScore;
     final couleur = estAlerte ? Colors.red : Colors.teal;
 
     return Center(
