@@ -1,9 +1,3 @@
-// =============================================================================
-// NeckLife — Service d'authentification Firebase
-// Login / logout / récupération du token JWT pour les appels API
-// Package : firebase_auth
-// =============================================================================
-
 import 'package:firebase_auth/firebase_auth.dart';
 
 class AuthService {
@@ -19,9 +13,6 @@ class AuthService {
 
   bool get estConnecte => utilisateurCourant != null;
 
-  // ---------------------------------------------------------------------------
-  // Connexion par email / mot de passe
-  // ---------------------------------------------------------------------------
   Future<UserCredential> connecter({
     required String email,
     required String motDePasse,
@@ -32,9 +23,6 @@ class AuthService {
     );
   }
 
-  // ---------------------------------------------------------------------------
-  // Création d'un nouveau compte
-  // ---------------------------------------------------------------------------
   Future<UserCredential> creerCompte({
     required String email,
     required String motDePasse,
@@ -45,32 +33,22 @@ class AuthService {
     );
   }
 
-  // ---------------------------------------------------------------------------
-  // Déconnexion
-  // ---------------------------------------------------------------------------
   Future<void> deconnecter() async {
     await _auth.signOut();
   }
 
-  // ---------------------------------------------------------------------------
   // Récupère le token JWT Firebase (rafraîchi automatiquement si expiré)
   // Utilisé par ApiClient pour les appels backend authentifiés
-  // ---------------------------------------------------------------------------
   Future<String?> obtenirToken() async {
     return await utilisateurCourant?.getIdToken();
   }
 
-  // ---------------------------------------------------------------------------
-  // Réinitialisation du mot de passe par email
-  // ---------------------------------------------------------------------------
   Future<void> reinitialiserMotDePasse(String email) async {
     await _auth.sendPasswordResetEmail(email: email);
   }
 
-  // ---------------------------------------------------------------------------
-  // Ré-authentification — requise par Firebase avant de changer l'email ou
-  // le mot de passe, pour des raisons de sécurité
-  // ---------------------------------------------------------------------------
+  // Ré-authentification requise par Firebase avant de changer l'email ou
+  // le mot de passe pour des raisons de sécurité
   Future<void> reauthentifier(String motDePasseActuel) async {
     final user = _auth.currentUser;
     if (user == null || user.email == null) return;
@@ -81,17 +59,12 @@ class AuthService {
     await user.reauthenticateWithCredential(credential);
   }
 
-  // ---------------------------------------------------------------------------
-  // Change l'email — envoie un email de confirmation à la nouvelle adresse ;
+  // Change l'email envoie un email de confirmation à la nouvelle adresse ;
   // l'email Firebase Auth n'est mis à jour qu'après validation du lien
-  // ---------------------------------------------------------------------------
   Future<void> changerEmail(String nouvelEmail) async {
     await _auth.currentUser?.verifyBeforeUpdateEmail(nouvelEmail);
   }
 
-  // ---------------------------------------------------------------------------
-  // Change le mot de passe
-  // ---------------------------------------------------------------------------
   Future<void> changerMotDePasse(String nouveauMotDePasse) async {
     await _auth.currentUser?.updatePassword(nouveauMotDePasse);
   }
