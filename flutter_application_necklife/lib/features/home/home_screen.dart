@@ -40,10 +40,26 @@ class _HomeScreenState extends State<HomeScreen> {
   StreamSubscription<String>? _subscriptionAlertes;
   StreamSubscription<List<ScanResult>>? _subscriptionBalayage;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _subscriptionDemandes;
+  StreamSubscription<List<Map<String, dynamic>>>? _subscriptionProchesSuivis;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _subscriptionChutesProches;
 
   // Demandes déjà affichées dans un dialogue, pour ne pas les répéter à
   // chaque mise à jour du stream
   final Set<String> _demandesAffichees = {};
+
+  // Idem pour les popups de chute côté aidant : un seul déclenchement par
+  // fallEvent
+  final Set<String> _chutesAffichees = {};
+
+  // UIDs actuellement suivis, pour savoir quand se réabonner à
+  // _subscriptionChutesProches (la liste change si un lien est accepté)
+  List<String> _uidsSuivisPourChutes = [];
+  Map<String, String> _nomsProches = {};
+
+  // Chute active (non confirmée) par uid de proche, alimenté par
+  // _subscriptionChutesProches — utilisé pour garder la carte du proche en
+  // rouge tant que le porteur n'a pas confirmé "Je vais bien"
+  Map<String, bool> _chuteActiveParUid = {};
 
   @override
   void initState() {
@@ -55,6 +71,9 @@ class _HomeScreenState extends State<HomeScreen> {
       _subscriptionDemandes = _linkCodeService
           .ecouterDemandesEnAttente(uid)
           .listen(_traiterDemandesEnAttente);
+      _subscriptionProchesSuivis = _linkCodeService
+          .ecouterProchesSuivis(uid)
+          .listen(_reabonnerChutesProches);
     }
   }
 
@@ -63,6 +82,8 @@ class _HomeScreenState extends State<HomeScreen> {
     _subscriptionAlertes?.cancel();
     _subscriptionBalayage?.cancel();
     _subscriptionDemandes?.cancel();
+    _subscriptionProchesSuivis?.cancel();
+    _subscriptionChutesProches?.cancel();
     super.dispose();
   }
 
@@ -145,15 +166,15 @@ class _HomeScreenState extends State<HomeScreen> {
   // notifierChuteDetectee) et alimente l'historique "Ma courbe".
   // lat/lng : voir TODO de purge DPIA dans imu_screen.dart.
   // ---------------------------------------------------------------------------
-  Future<void> _enregistrerFallEventAuto() async {
+  Future<String?> _enregistrerFallEventAuto() async {
     final uid = FirebaseAuth.instance.currentUser?.uid;
-    if (uid == null) return;
+    if (uid == null) return null;
 
     final userDoc = await _firestore.collection('users').doc(uid).get();
     final consentement = userDoc.data()?['locationConsent'] as bool? ?? false;
     final position = consentement ? await _locationService.obtenirPositionActuelle() : null;
 
-    await _firestore.collection('fallEvents').add({
+    final ref = await _firestore.collection('fallEvents').add({
       'uid':       uid,
       'type':      'CHUTE_AUTO',
       'statut':    'en_attente',
@@ -161,14 +182,30 @@ class _HomeScreenState extends State<HomeScreen> {
       if (position != null) 'lat': position.lat,
       if (position != null) 'lng': position.lng,
     });
+    return ref.id;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Persiste la confirmation "Je vais bien" du porteur sur son fallEvent —
+  // c'est ce qui fait repasser chuteActive à false côté aidant (voir
+  // _traiterChutesNonConfirmees). Indépendant de la labellisation
+  // chute_reelle/fausse_alerte faite a posteriori depuis imu_screen.dart.
+  // ---------------------------------------------------------------------------
+  Future<void> _confirmerJeVaisBien(String fallEventId) async {
+    await _firestore.collection('fallEvents').doc(fallEventId).update({
+      'confirmeParPorteur': true,
+      'confirmeAt': FieldValue.serverTimestamp(),
+    });
   }
 
   // ---------------------------------------------------------------------------
   // Alerte de chute détectée sur SON PROPRE collier
   // ---------------------------------------------------------------------------
-  void _afficherAlerteChute(String _) {
+  Future<void> _afficherAlerteChute(String _) async {
     if (!mounted) return;
-    _enregistrerFallEventAuto();
+    final fallEventId = await _enregistrerFallEventAuto();
+    if (!mounted || fallEventId == null) return;
+
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -177,7 +214,10 @@ class _HomeScreenState extends State<HomeScreen> {
         content: const Text('Une chute a été détectée. Êtes-vous en sécurité ?'),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () async {
+              Navigator.pop(context);
+              await _confirmerJeVaisBien(fallEventId);
+            },
             child: const Text('Je vais bien'),
           ),
           ElevatedButton(
@@ -188,6 +228,81 @@ class _HomeScreenState extends State<HomeScreen> {
         ],
       ),
     );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Réabonnement à _subscriptionChutesProches quand l'ensemble des proches
+  // suivis change (nouveau lien accepté, proche retiré, etc.)
+  // ---------------------------------------------------------------------------
+  void _reabonnerChutesProches(List<Map<String, dynamic>> proches) {
+    final uids = proches.map((p) => p['uid'] as String).toList();
+    _nomsProches = {
+      for (final p in proches) p['uid'] as String: p['nom'] as String? ?? 'Un proche',
+    };
+
+    final memeEnsemble = _uidsSuivisPourChutes.length == uids.length &&
+        _uidsSuivisPourChutes.toSet().containsAll(uids);
+    if (memeEnsemble) return;
+
+    _uidsSuivisPourChutes = uids;
+    _subscriptionChutesProches?.cancel();
+    _subscriptionChutesProches = null;
+
+    if (uids.isEmpty) {
+      if (_chuteActiveParUid.isNotEmpty && mounted) {
+        setState(() => _chuteActiveParUid = {});
+      }
+      return;
+    }
+
+    _subscriptionChutesProches = _linkCodeService
+        .ecouterChutesNonConfirmees(uids)
+        .listen(_traiterChutesNonConfirmees);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Chutes non confirmées des proches suivis : met à jour l'état "carte
+  // rouge" (_chuteActiveParUid) et affiche une popup une seule fois par
+  // fallEvent (voir _chutesAffichees)
+  // ---------------------------------------------------------------------------
+  void _traiterChutesNonConfirmees(
+    QuerySnapshot<Map<String, dynamic>> snapshot,
+  ) {
+    final actifs = <String>{};
+    for (final doc in snapshot.docs) {
+      final data = doc.data();
+      final statut = data['statut'] as String? ?? 'en_attente';
+      final estActif = statut == 'en_attente' && data['confirmeParPorteur'] != true;
+      if (!estActif) continue;
+
+      final uidPorteur = data['uid'] as String;
+      actifs.add(uidPorteur);
+
+      if (_chutesAffichees.contains(doc.id)) continue;
+      _chutesAffichees.add(doc.id);
+
+      final nom = _nomsProches[uidPorteur] ?? 'Un proche';
+      if (!mounted) continue;
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => AlertDialog(
+          title: Text('CHUTE DÉTECTÉE — $nom', style: const TextStyle(color: Colors.red)),
+          content: Text(
+            '$nom a peut-être fait une chute. Consultez sa localisation '
+            'et ses contacts d\'urgence si besoin.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (mounted) setState(() => _chuteActiveParUid = {for (final u in actifs) u: true});
   }
 
   // ---------------------------------------------------------------------------
@@ -415,7 +530,13 @@ class _HomeScreenState extends State<HomeScreen> {
           );
         }
 
-        final proches = [...snapshot.data!]..sort((a, b) {
+        final proches = snapshot.data!
+            .map((p) => {
+                  ...p,
+                  'chuteActive': _chuteActiveParUid[p['uid']] == true,
+                })
+            .toList()
+          ..sort((a, b) {
             final chuteA = a['chuteActive'] == true ? 1 : 0;
             final chuteB = b['chuteActive'] == true ? 1 : 0;
             return chuteB.compareTo(chuteA);
