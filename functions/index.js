@@ -1,8 +1,6 @@
-// =============================================================================
-// NeckLife — Cloud Functions
+// NeckLife : Cloud Functions
 // Notifie les proches (liens acceptés) par push dès qu'un nouvel événement
 // de chute est enregistré dans fallEvents
-// =============================================================================
 
 const {onDocumentCreated} = require("firebase-functions/v2/firestore");
 const {initializeApp} = require("firebase-admin/app");
@@ -21,7 +19,7 @@ exports.notifierChuteDetectee = onDocumentCreated("fallEvents/{eventId}", async 
 
   const firestore = getFirestore();
 
-  // Nom du porteur du collier, pour le corps de la notification
+  // Nom du porteur du collier pour le corps de la notification
   const porteurDoc = await firestore.collection("users").doc(uidPorteur).get();
   const nomPorteur = porteurDoc.data()?.nom || "Un proche";
 

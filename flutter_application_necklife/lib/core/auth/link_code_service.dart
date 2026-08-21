@@ -125,12 +125,30 @@ class LinkCodeService {
           'uid': followedUid,
           'nom': data?['nom'] as String? ?? 'Proche',
           'telephone': data?['telephone'] as String?,
-          'chuteActive': data?['chuteActive'] as bool?,
           'contactsUrgence': data?['contactsUrgence'] as List<dynamic>? ?? [],
         });
       }
       return proches;
     });
+  }
+
+  // ---------------------------------------------------------------------------
+  // fallEvents récents (<72h) des proches suivis, non encore confirmés par
+  // leur porteur ("Je vais bien") — utilisé côté aidant pour la popup de
+  // chute et pour garder la carte du proche en rouge tant que non confirmé.
+  // La confirmation (confirmeParPorteur != true) est filtrée côté Dart plutôt
+  // qu'en requête Firestore pour rester cohérent avec _ecouterHistoriqueChutes
+  // (voir home_screen.dart) et éviter de combiner whereIn avec un opérateur !=.
+  // ---------------------------------------------------------------------------
+  Stream<QuerySnapshot<Map<String, dynamic>>> ecouterChutesNonConfirmees(
+    List<String> uidsSuivis,
+  ) {
+    final depuis = DateTime.now().subtract(const Duration(hours: 72));
+    return _firestore
+        .collection('fallEvents')
+        .where('uid', whereIn: uidsSuivis)
+        .where('timestamp', isGreaterThan: Timestamp.fromDate(depuis))
+        .snapshots();
   }
 
   // ---------------------------------------------------------------------------
