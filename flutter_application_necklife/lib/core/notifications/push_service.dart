@@ -1,10 +1,3 @@
-// =============================================================================
-// NeckLife — Service de notifications push
-// Demande la permission de notification et sauvegarde le token FCM obtenu
-// dans users/{uid}.fcmToken, consommé par la Cloud Function de notification
-// de chute (functions/index.js)
-// =============================================================================
-
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
@@ -13,10 +6,7 @@ class PushService {
   final FirebaseMessaging _messaging = FirebaseMessaging.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
-  // ---------------------------------------------------------------------------
-  // Demande la permission de notification puis sauvegarde le token FCM —
-  // à appeler une fois l'utilisateur connecté
-  // ---------------------------------------------------------------------------
+  // Demande la permission de notification puis sauvegarde le token FCM à appeler une fois l'utilisateur connecté
   Future<void> initialiser() async {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return;
@@ -32,7 +22,7 @@ class PushService {
       await _sauvegarderToken(uid, token);
     }
 
-    // Le token peut être renouvelé par le système — on le resauvegarde alors
+    // Le token peut être renouvelé par le système on le resauvegarde 
     _messaging.onTokenRefresh.listen((nouveauToken) => _sauvegarderToken(uid, nouveauToken));
   }
 
