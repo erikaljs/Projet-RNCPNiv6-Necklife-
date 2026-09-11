@@ -2,6 +2,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 
+import 'vibration_service.dart';
+
 class PushService {
   final FirebaseMessaging _messaging = FirebaseMessaging.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
@@ -22,8 +24,14 @@ class PushService {
       await _sauvegarderToken(uid, token);
     }
 
-    // Le token peut être renouvelé par le système on le resauvegarde 
+    // Le token peut être renouvelé par le système on le resauvegarde
     _messaging.onTokenRefresh.listen((nouveauToken) => _sauvegarderToken(uid, nouveauToken));
+
+    // App au premier plan : FCM n'affiche pas de notification système dans
+    // ce cas, donc on déclenche nous-mêmes la vibration d'alerte. Le cas
+    // arrière-plan/app fermée est couvert par firebaseMessagingBackgroundHandler
+    // (voir main.dart).
+    FirebaseMessaging.onMessage.listen((_) => declencherVibrationAlerte());
   }
 
   Future<void> _sauvegarderToken(String uid, String token) async {
