@@ -47,6 +47,9 @@ dependencies:
   # Notifications push (alertes de chute envoyées aux proches)
   firebase_messaging: ^15.2.4
 
+  # Vibration distincte à la réception d'une alerte de chute
+  vibration: ^2.0.0
+
   # HTTP client avec intercepteurs JWT
   dio: ^5.8.0+1
 
