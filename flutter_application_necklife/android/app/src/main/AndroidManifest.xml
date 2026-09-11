@@ -6,6 +6,9 @@
     <!-- Scan/connexion BLE avec le collier — requis depuis Android 12 (API 31+) -->
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation"/>
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>
+
+    <!-- Affichage des notifications push — requis depuis Android 13 (API 33+) -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <application
         android:label="flutter_application_necklife"
         android:name="${applicationName}"
@@ -14,7 +17,6 @@
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTop"
-            android:taskAffinity=""
             android:theme="@style/LaunchTheme"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
             android:hardwareAccelerated="true"
@@ -37,6 +39,13 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+
+        <!-- Canal de notification par défaut utilisé par les messages FCM
+             envoyés par notifierChuteDetectee (voir functions/index.js) —
+             nécessaire pour un affichage fiable app fermée/arrière-plan -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="necklife_alertes" />
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and
@@ -47,6 +56,13 @@
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
+        </intent>
+        <!-- Requis Android 11+ (API 30+) pour que canLaunchUrl(tel:) renvoie
+             vrai — sans ça, tous les boutons "Appeler" (_appelerNumero dans
+             home_screen.dart/sos_screen.dart) échouent silencieusement -->
+        <intent>
+            <action android:name="android.intent.action.DIAL"/>
+            <data android:scheme="tel"/>
         </intent>
     </queries>
 </manifest>
