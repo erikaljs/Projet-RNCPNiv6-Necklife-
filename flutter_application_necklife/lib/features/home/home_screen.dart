@@ -18,7 +18,45 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../core/auth/link_code_service.dart';
 import '../../core/ble/ble_manager.dart';
 import '../../core/location/location_service.dart';
+import '../../core/validation/text_validators.dart';
 import '../profile/profile_screen.dart';
+
+// ---------------------------------------------------------------------------
+// Résout le numéro à utiliser entre celui du profil d'un proche et celui
+// attribué localement par l'aidant — le plus récemment modifié des deux
+// l'emporte. Partagée entre _CarteProche (bouton d'appel de la fiche) et
+// _HomeScreenState (bouton "Appeler" de la popup de chute, voir
+// _traiterChutesNonConfirmees) : même logique de priorité, une seule
+// implémentation.
+// ---------------------------------------------------------------------------
+({String? numero, String source}) _resoudreNumeroProche(
+  Map<String, dynamic>? profil,
+  Map<String, dynamic>? contactLocal,
+) {
+  final numeroProfil = profil?['telephone'] as String?;
+  final modifieLeProfil = profil?['telephoneModifieLe'] as Timestamp?;
+
+  final numeroLocal = contactLocal?['telephoneLocal'] as String?;
+  final modifieLeLocal = contactLocal?['dernierModifieLe'] as Timestamp?;
+
+  final profilValide = numeroProfil != null && numeroProfil.isNotEmpty;
+  final localValide = numeroLocal != null && numeroLocal.isNotEmpty;
+
+  if (!profilValide && !localValide) return (numero: null, source: 'aucun');
+  if (!localValide) return (numero: numeroProfil, source: 'profil');
+  if (!profilValide) return (numero: numeroLocal, source: 'local');
+
+  // Les deux existent : le plus récemment modifié gagne. Sans timestamp sur
+  // l'un des deux (donnée historique), on privilégie celui qui en a un.
+  if (modifieLeProfil == null && modifieLeLocal == null) {
+    return (numero: numeroLocal, source: 'local');
+  }
+  if (modifieLeProfil == null) return (numero: numeroLocal, source: 'local');
+  if (modifieLeLocal == null) return (numero: numeroProfil, source: 'profil');
+  return modifieLeLocal.compareTo(modifieLeProfil) >= 0
+      ? (numero: numeroLocal, source: 'local')
+      : (numero: numeroProfil, source: 'profil');
+}
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -261,13 +299,30 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   // ---------------------------------------------------------------------------
+  // Résout le numéro du porteur ayant déclenché l'alerte, pour le bouton
+  // "Appeler" de la popup de chute — même logique de priorité que pour la
+  // fiche proche (voir _resoudreNumeroProche), fetch ponctuel puisque la
+  // popup n'a besoin du numéro qu'au moment de son affichage
+  // ---------------------------------------------------------------------------
+  Future<String?> _resoudreNumeroPorteur(String uidPorteur) async {
+    final aidantUid = FirebaseAuth.instance.currentUser?.uid;
+    if (aidantUid == null) return null;
+
+    final profilDoc = await _linkCodeService.ecouterProfil(uidPorteur).first;
+    final contactLocal =
+        await _linkCodeService.ecouterContactLocal(aidantUid, uidPorteur).first;
+
+    return _resoudreNumeroProche(profilDoc.data(), contactLocal).numero;
+  }
+
+  // ---------------------------------------------------------------------------
   // Chutes non confirmées des proches suivis : met à jour l'état "carte
   // rouge" (_chuteActiveParUid) et affiche une popup une seule fois par
   // fallEvent (voir _chutesAffichees)
   // ---------------------------------------------------------------------------
-  void _traiterChutesNonConfirmees(
+  Future<void> _traiterChutesNonConfirmees(
     QuerySnapshot<Map<String, dynamic>> snapshot,
-  ) {
+  ) async {
     final actifs = <String>{};
     for (final doc in snapshot.docs) {
       final data = doc.data();
@@ -279,9 +334,12 @@ class _HomeScreenState extends State<HomeScreen> {
       actifs.add(uidPorteur);
 
       if (_chutesAffichees.contains(doc.id)) continue;
+      // Marqué avant le fetch async du numéro pour éviter un double
+      // traitement si le stream refire pendant l'attente
       _chutesAffichees.add(doc.id);
 
       final nom = _nomsProches[uidPorteur] ?? 'Un proche';
+      final numero = await _resoudreNumeroPorteur(uidPorteur);
       if (!mounted) continue;
       showDialog(
         context: context,
@@ -297,6 +355,15 @@ class _HomeScreenState extends State<HomeScreen> {
               onPressed: () => Navigator.pop(context),
               child: const Text('OK'),
             ),
+            if (numero != null)
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+                onPressed: () async {
+                  Navigator.pop(context);
+                  await _appelerNumero(numero);
+                },
+                child: Text('Appeler $numero', style: const TextStyle(color: Colors.white)),
+              ),
           ],
         ),
       );
@@ -577,10 +644,33 @@ class _CarteProche extends StatefulWidget {
 
 class _CarteProcheState extends State<_CarteProche> {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final LinkCodeService _linkCodeService = LinkCodeService();
 
   bool _etendu = false;
   Stream<({double lat, double lng})?>? _streamPosition;
   Stream<List<QueryDocumentSnapshot<Map<String, dynamic>>>>? _streamHistorique;
+
+  // Numéro local attribué par cet aidant à ce proche — écouté en continu
+  // (pas seulement en mode déplié) car il conditionne la couleur du bouton
+  // d'appel toujours visible sur la fiche repliée
+  Stream<Map<String, dynamic>?>? _streamContactLocal;
+
+  // Profil du proche en flux continu — nécessaire pour réagir en direct à
+  // un numéro que LUI ajoute/efface sur sa propre page profil (voir bug
+  // "le bouton ne repasse pas à l'état orange" : ecouterProchesSuivis ne
+  // suffit pas, elle ne se redéclenche pas quand users/{procheUid} change)
+  Stream<DocumentSnapshot<Map<String, dynamic>>>? _streamProfilProche;
+
+  @override
+  void initState() {
+    super.initState();
+    final aidantUid = FirebaseAuth.instance.currentUser?.uid;
+    final procheUid = widget.proche['uid'] as String;
+    _streamProfilProche = _linkCodeService.ecouterProfil(procheUid);
+    if (aidantUid != null) {
+      _streamContactLocal = _linkCodeService.ecouterContactLocal(aidantUid, procheUid);
+    }
+  }
 
   // ---------------------------------------------------------------------------
   // Écoute le fallEvent le plus récent (<72h) de ce proche contenant une
@@ -739,12 +829,107 @@ class _CarteProcheState extends State<_CarteProche> {
     );
   }
 
+  // ---------------------------------------------------------------------------
+  // Dialogue affiché quand aucun numéro n'est disponible pour ce proche —
+  // permet à l'aidant d'en attribuer un localement (voir _resoudreNumero)
+  // ---------------------------------------------------------------------------
+  Future<void> _proposerNumeroLocal() async {
+    final aidantUid = FirebaseAuth.instance.currentUser?.uid;
+    if (aidantUid == null) return;
+    final procheUid = widget.proche['uid'] as String;
+
+    final controleur = TextEditingController();
+    final formKey = GlobalKey<FormState>();
+
+    await showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Numéro non renseigné'),
+        content: Form(
+          key: formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Cet utilisateur n\'a pas renseigné de numéro. '
+                'Si vous souhaitez en lier un :',
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: controleur,
+                keyboardType: TextInputType.phone,
+                decoration: const InputDecoration(labelText: 'Numéro'),
+                validator: validerTelephone,
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Annuler'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              if (!formKey.currentState!.validate()) return;
+              final numero = controleur.text.trim();
+              Navigator.pop(dialogContext);
+              await _linkCodeService.definirTelephoneLocal(
+                followerUid: aidantUid,
+                followedUid: procheUid,
+                telephone: numero,
+              );
+            },
+            child: const Text('Enregistrer'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Ouvre Google Maps (app installée si disponible, sinon navigateur) sur
+  // le point de localisation reçu — l'utilisateur accède ensuite au bouton
+  // itinéraire directement depuis Maps
+  // ---------------------------------------------------------------------------
+  Future<void> _ouvrirDansMaps(double lat, double lng) async {
+    final uri = Uri.parse('https://www.google.com/maps/search/?api=1&query=$lat,$lng');
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: _streamProfilProche,
+      builder: (context, snapshotProfil) {
+        return StreamBuilder<Map<String, dynamic>?>(
+          stream: _streamContactLocal,
+          builder: (context, snapshotContactLocal) {
+            final resolution = _resoudreNumeroProche(
+              snapshotProfil.data?.data(),
+              snapshotContactLocal.data,
+            );
+            return _construireCarte(resolution);
+          },
+        );
+      },
+    );
+  }
+
+  Widget _construireCarte(({String? numero, String source}) resolution) {
+    final numero = resolution.numero;
+    // Vert = numéro du profil du proche, bleu = numéro attribué localement
+    // par cet aidant, orange = aucun numéro disponible (tap = pop-up de saisie)
+    final couleurAppel = switch (resolution.source) {
+      'profil' => Colors.green,
+      'local' => Colors.blue,
+      _ => Colors.orange,
+    };
     final chuteActive = widget.proche['chuteActive'] == true;
     final nom = widget.proche['nom'] as String? ?? 'Proche';
-    // Numéro de test tant qu'aucun numéro n'est stocké pour ce proche
-    final numero = widget.proche['telephone'] as String? ?? '0600000000';
 
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
@@ -762,8 +947,10 @@ class _CarteProcheState extends State<_CarteProche> {
               ),
             ),
             trailing: IconButton(
-              icon: const Icon(Icons.call, color: Colors.green),
-              onPressed: () => widget.onAppeler(numero),
+              icon: Icon(Icons.call, color: couleurAppel),
+              onPressed: numero != null
+                  ? () => widget.onAppeler(numero)
+                  : _proposerNumeroLocal,
             ),
             onTap: _basculerExpansion,
           ),
@@ -792,30 +979,38 @@ class _CarteProcheState extends State<_CarteProche> {
                           style: TextStyle(color: Colors.grey),
                         );
                       }
-                      return ClipRRect(
-                        borderRadius: BorderRadius.circular(8),
-                        child: SizedBox(
-                          height: 180,
-                          child: FlutterMap(
-                            options: MapOptions(
-                              initialCenter: LatLng(position.lat, position.lng),
-                              initialZoom: 15,
-                            ),
-                            children: [
-                              TileLayer(
-                                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                                userAgentPackageName: 'com.necklife.app',
-                              ),
-                              MarkerLayer(markers: [
-                                Marker(
-                                  point: LatLng(position.lat, position.lng),
-                                  width: 40,
-                                  height: 40,
-                                  child: const Icon(Icons.location_pin,
-                                      color: Colors.red, size: 40),
+                      return GestureDetector(
+                        onTap: () => _ouvrirDansMaps(position.lat, position.lng),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: SizedBox(
+                            height: 180,
+                            child: IgnorePointer(
+                              // La carte elle-même ne doit pas intercepter le
+                              // tap (pas de pan/zoom souhaité ici) — tap =
+                              // ouverture directe dans Maps
+                              child: FlutterMap(
+                                options: MapOptions(
+                                  initialCenter: LatLng(position.lat, position.lng),
+                                  initialZoom: 15,
                                 ),
-                              ]),
-                            ],
+                                children: [
+                                  TileLayer(
+                                    urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                                    userAgentPackageName: 'com.necklife.app',
+                                  ),
+                                  MarkerLayer(markers: [
+                                    Marker(
+                                      point: LatLng(position.lat, position.lng),
+                                      width: 40,
+                                      height: 40,
+                                      child: const Icon(Icons.location_pin,
+                                          color: Colors.red, size: 40),
+                                    ),
+                                  ]),
+                                ],
+                              ),
+                            ),
                           ),
                         ),
                       );

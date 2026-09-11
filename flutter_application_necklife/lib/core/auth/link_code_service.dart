@@ -124,7 +124,6 @@ class LinkCodeService {
           'linkId': doc.id,
           'uid': followedUid,
           'nom': data?['nom'] as String? ?? 'Proche',
-          'telephone': data?['telephone'] as String?,
           'contactsUrgence': data?['contactsUrgence'] as List<dynamic>? ?? [],
         });
       }
@@ -149,6 +148,65 @@ class LinkCodeService {
         .where('uid', whereIn: uidsSuivis)
         .where('timestamp', isGreaterThan: Timestamp.fromDate(depuis))
         .snapshots();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Profil Firestore d'un utilisateur, en flux continu — utilisé côté carte
+  // proche pour réagir en direct aux changements que CE proche fait sur SON
+  // PROPRE profil (ex : ajout/suppression de son numéro de téléphone).
+  // ecouterProchesSuivis() ne convient pas pour ça : son asyncMap ne fait
+  // qu'un get() ponctuel sur users/{followedUid}, qui ne se redéclenche que
+  // si la collection links change, pas si users change.
+  // ---------------------------------------------------------------------------
+  Stream<DocumentSnapshot<Map<String, dynamic>>> ecouterProfil(String uid) {
+    return _firestore.collection('users').doc(uid).snapshots();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Retire un lien de suivi côté aidant (page "Modifier les liaisons") — le
+  // proche disparaît de la liste tant qu'un nouveau code de liaison n'est
+  // pas utilisé pour recréer le lien
+  // ---------------------------------------------------------------------------
+  Future<void> supprimerLienSuivi(String linkId) async {
+    await _firestore.collection('links').doc(linkId).delete();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Numéro de téléphone attribué localement par cet aidant à un proche
+  // suivi — stocké sur la relation (contactsLocaux), pas sur le profil du
+  // proche : visible uniquement par cet aidant précis, pas par les autres
+  // aidants qui suivent le même proche. ID déterministe
+  // {followerUid}_{followedUid}, même schéma que links.
+  // ---------------------------------------------------------------------------
+  Stream<Map<String, dynamic>?> ecouterContactLocal(
+    String followerUid,
+    String followedUid,
+  ) {
+    return _firestore
+        .collection('contactsLocaux')
+        .doc('${followerUid}_$followedUid')
+        .snapshots()
+        .map((doc) => doc.data());
+  }
+
+  // ---------------------------------------------------------------------------
+  // Enregistre/modifie le numéro local attribué à un proche par cet aidant.
+  // dernierModifieLe sert à départager avec le numéro du profil du proche
+  // lui-même : le plus récemment modifié des deux est utilisé pour l'appel
+  // (voir _resoudreNumero dans home_screen.dart).
+  // ---------------------------------------------------------------------------
+  Future<void> definirTelephoneLocal({
+    required String followerUid,
+    required String followedUid,
+    required String telephone,
+  }) async {
+    await _firestore.collection('contactsLocaux').doc('${followerUid}_$followedUid').set({
+      'followerUid': followerUid,
+      'followedUid': followedUid,
+      'telephoneLocal': telephone,
+      'dernierModifiePar': followerUid,
+      'dernierModifieLe': FieldValue.serverTimestamp(),
+    });
   }
 
   // ---------------------------------------------------------------------------
