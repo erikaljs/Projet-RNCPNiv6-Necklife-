@@ -64,5 +64,18 @@
             <action android:name="android.intent.action.DIAL"/>
             <data android:scheme="tel"/>
         </intent>
+        <!-- Requis Android 11+ (API 30+) pour que canLaunchUrl(https://...)
+             trouve un handler (navigateur/app) — sans ça, tout lien https
+             échoue silencieusement (component name null dans les logs),
+             y compris _ouvrirDansMaps dans home_screen.dart -->
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="https"/>
+        </intent>
+        <!-- Idem pour les URI geo: (liens de localisation type géo) -->
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="geo"/>
+        </intent>
     </queries>
 </manifest>
