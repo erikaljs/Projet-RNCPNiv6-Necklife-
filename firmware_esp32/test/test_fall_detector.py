@@ -39,7 +39,7 @@ def test_tu01_magnitude_gravite():
 
 
 # ---------------------------------------------------------------------------
-# TU-02 : chute libre détectée (magnitude < seuil 0.3)
+# TU-02 : chute libre détectée (magnitude < seuil 3.0)
 # ---------------------------------------------------------------------------
 def test_tu02_free_fall_vrai():
     """is_free_fall(0.1) → True : magnitude bien inférieure au seuil."""
@@ -50,24 +50,24 @@ def test_tu02_free_fall_vrai():
 # TU-03 : pas de chute libre (magnitude ≥ seuil)
 # ---------------------------------------------------------------------------
 def test_tu03_free_fall_faux():
-    """is_free_fall(1.0) → False : magnitude trop élevée pour une chute libre."""
-    assert is_free_fall(1.0) is False
+    """is_free_fall(5.0) → False : magnitude trop élevée pour une chute libre."""
+    assert is_free_fall(5.0) is False
 
 
 # ---------------------------------------------------------------------------
-# TU-04 : impact détecté (magnitude > seuil 3.0)
+# TU-04 : impact détecté (magnitude > seuil 15.0)
 # ---------------------------------------------------------------------------
 def test_tu04_impact_vrai():
-    """is_impact(3.5) → True : magnitude supérieure au seuil d'impact."""
-    assert is_impact(3.5) is True
+    """is_impact(16.0) → True : magnitude supérieure au seuil d'impact."""
+    assert is_impact(16.0) is True
 
 
 # ---------------------------------------------------------------------------
 # TU-05 : pas d'impact (magnitude ≤ seuil)
 # ---------------------------------------------------------------------------
 def test_tu05_impact_faux():
-    """is_impact(2.0) → False : magnitude insuffisante pour un impact."""
-    assert is_impact(2.0) is False
+    """is_impact(12.0) → False : magnitude (manipulation normale) insuffisante pour un impact."""
+    assert is_impact(12.0) is False
 
 
 # ---------------------------------------------------------------------------
@@ -83,7 +83,7 @@ def test_tu06_fsm_chute_complete():
     assert detecteur.etat == FallDetector.ETAT_CHUTE
 
     # Simulation impact immédiat (dans la fenêtre)
-    alerte = detecteur.traiter_mesure(0.0, 0.0, 4.0)
+    alerte = detecteur.traiter_mesure(0.0, 0.0, 16.0)
     assert alerte is True, "L'alerte doit être déclenchée après l'impact"
     assert detecteur.etat == FallDetector.ETAT_ALERTE
 

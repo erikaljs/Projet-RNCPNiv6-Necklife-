@@ -18,7 +18,45 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../core/auth/link_code_service.dart';
 import '../../core/ble/ble_manager.dart';
 import '../../core/location/location_service.dart';
+import '../../core/validation/text_validators.dart';
 import '../profile/profile_screen.dart';
+
+// ---------------------------------------------------------------------------
+// Résout le numéro à utiliser entre celui du profil d'un proche et celui
+// attribué localement par l'aidant — le plus récemment modifié des deux
+// l'emporte. Partagée entre _CarteProche (bouton d'appel de la fiche) et
+// _HomeScreenState (bouton "Appeler" de la popup de chute, voir
+// _traiterChutesNonConfirmees) : même logique de priorité, une seule
+// implémentation.
+// ---------------------------------------------------------------------------
+({String? numero, String source}) _resoudreNumeroProche(
+  Map<String, dynamic>? profil,
+  Map<String, dynamic>? contactLocal,
+) {
+  final numeroProfil = profil?['telephone'] as String?;
+  final modifieLeProfil = profil?['telephoneModifieLe'] as Timestamp?;
+
+  final numeroLocal = contactLocal?['telephoneLocal'] as String?;
+  final modifieLeLocal = contactLocal?['dernierModifieLe'] as Timestamp?;
+
+  final profilValide = numeroProfil != null && numeroProfil.isNotEmpty;
+  final localValide = numeroLocal != null && numeroLocal.isNotEmpty;
+
+  if (!profilValide && !localValide) return (numero: null, source: 'aucun');
+  if (!localValide) return (numero: numeroProfil, source: 'profil');
+  if (!profilValide) return (numero: numeroLocal, source: 'local');
+
+  // Les deux existent : le plus récemment modifié gagne. Sans timestamp sur
+  // l'un des deux (donnée historique), on privilégie celui qui en a un.
+  if (modifieLeProfil == null && modifieLeLocal == null) {
+    return (numero: numeroLocal, source: 'local');
+  }
+  if (modifieLeProfil == null) return (numero: numeroLocal, source: 'local');
+  if (modifieLeLocal == null) return (numero: numeroProfil, source: 'profil');
+  return modifieLeLocal.compareTo(modifieLeProfil) >= 0
+      ? (numero: numeroLocal, source: 'local')
+      : (numero: numeroProfil, source: 'profil');
+}
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -261,13 +299,30 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   // ---------------------------------------------------------------------------
+  // Résout le numéro du porteur ayant déclenché l'alerte, pour le bouton
+  // "Appeler" de la popup de chute — même logique de priorité que pour la
+  // fiche proche (voir _resoudreNumeroProche), fetch ponctuel puisque la
+  // popup n'a besoin du numéro qu'au moment de son affichage
+  // ---------------------------------------------------------------------------
+  Future<String?> _resoudreNumeroPorteur(String uidPorteur) async {
+    final aidantUid = FirebaseAuth.instance.currentUser?.uid;
+    if (aidantUid == null) return null;
+
+    final profilDoc = await _linkCodeService.ecouterProfil(uidPorteur).first;
+    final contactLocal =
+        await _linkCodeService.ecouterContactLocal(aidantUid, uidPorteur).first;
+
+    return _resoudreNumeroProche(profilDoc.data(), contactLocal).numero;
+  }
+
+  // ---------------------------------------------------------------------------
   // Chutes non confirmées des proches suivis : met à jour l'état "carte
   // rouge" (_chuteActiveParUid) et affiche une popup une seule fois par
   // fallEvent (voir _chutesAffichees)
   // ---------------------------------------------------------------------------
-  void _traiterChutesNonConfirmees(
+  Future<void> _traiterChutesNonConfirmees(
     QuerySnapshot<Map<String, dynamic>> snapshot,
-  ) {
+  ) async {
     final actifs = <String>{};
     for (final doc in snapshot.docs) {
       final data = doc.data();
@@ -279,9 +334,12 @@ class _HomeScreenState extends State<HomeScreen> {
       actifs.add(uidPorteur);
 
       if (_chutesAffichees.contains(doc.id)) continue;
+      // Marqué avant le fetch async du numéro pour éviter un double
+      // traitement si le stream refire pendant l'attente
       _chutesAffichees.add(doc.id);
 
       final nom = _nomsProches[uidPorteur] ?? 'Un proche';
+      final numero = await _resoudreNumeroPorteur(uidPorteur);
       if (!mounted) continue;
       showDialog(
         context: context,
@@ -297,6 +355,15 @@ class _HomeScreenState extends State<HomeScreen> {
               onPressed: () => Navigator.pop(context),
               child: const Text('OK'),
             ),
+            if (numero != null)
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+                onPressed: () async {
+                  Navigator.pop(context);
+                  await _appelerNumero(numero);
+                },
+                child: Text('Appeler $numero', style: const TextStyle(color: Colors.white)),
+              ),
           ],
         ),
       );
@@ -466,7 +533,7 @@ class _HomeScreenState extends State<HomeScreen> {
     if (_estConnecte) {
       return Card(
         child: ListTile(
-          leading: const Icon(Icons.watch, color: Colors.green, size: 40),
+          leading: const Icon(Icons.bluetooth_connected, color: Colors.green, size: 40),
           title: const Text('Collier connecté', style: TextStyle(fontWeight: FontWeight.bold)),
           // TODO: le firmware n'expose pas encore de caractéristique BLE de
           // charge batterie — quand disponible, remplacer cette ligne par
@@ -486,7 +553,13 @@ class _HomeScreenState extends State<HomeScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Text('Collier non associé', style: TextStyle(fontWeight: FontWeight.bold)),
+            const Row(
+              children: [
+                Icon(Icons.bluetooth, color: Colors.grey),
+                SizedBox(width: 8),
+                Text('Collier non associé', style: TextStyle(fontWeight: FontWeight.bold)),
+              ],
+            ),
             const SizedBox(height: 8),
             if (!_balayageEnCours)
               ElevatedButton.icon(
@@ -577,17 +650,47 @@ class _CarteProche extends StatefulWidget {
 
 class _CarteProcheState extends State<_CarteProche> {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final LinkCodeService _linkCodeService = LinkCodeService();
 
   bool _etendu = false;
-  Stream<({double lat, double lng})?>? _streamPosition;
+
+  // Position du dernier fallEvent (<72h) avec sa date — toujours actif (pas
+  // seulement en mode déplié) car nécessaire pour décider, dès la fiche
+  // repliée, si la position de secours "batterie faible" doit prendre le
+  // pas sur celle de la chute (voir _resoudreEtatLocalisation)
+  Stream<({double lat, double lng, DateTime eventTime})?>? _streamPosition;
+
   Stream<List<QueryDocumentSnapshot<Map<String, dynamic>>>>? _streamHistorique;
+
+  // Numéro local attribué par cet aidant à ce proche — écouté en continu
+  // (pas seulement en mode déplié) car il conditionne la couleur du bouton
+  // d'appel toujours visible sur la fiche repliée
+  Stream<Map<String, dynamic>?>? _streamContactLocal;
+
+  // Profil du proche en flux continu — nécessaire pour réagir en direct à
+  // un numéro que LUI ajoute/efface sur sa propre page profil (voir bug
+  // "le bouton ne repasse pas à l'état orange" : ecouterProchesSuivis ne
+  // suffit pas, elle ne se redéclenche pas quand users/{procheUid} change)
+  Stream<DocumentSnapshot<Map<String, dynamic>>>? _streamProfilProche;
+
+  @override
+  void initState() {
+    super.initState();
+    final aidantUid = FirebaseAuth.instance.currentUser?.uid;
+    final procheUid = widget.proche['uid'] as String;
+    _streamProfilProche = _linkCodeService.ecouterProfil(procheUid);
+    _streamPosition = _ecouterDernierePosition();
+    if (aidantUid != null) {
+      _streamContactLocal = _linkCodeService.ecouterContactLocal(aidantUid, procheUid);
+    }
+  }
 
   // ---------------------------------------------------------------------------
   // Écoute le fallEvent le plus récent (<72h) de ce proche contenant une
-  // position — lat/lng ne sont présents que si le proche avait consenti au
-  // partage au moment de l'alerte
+  // position, avec sa date — lat/lng ne sont présents que si le proche avait
+  // consenti au partage au moment de l'alerte
   // ---------------------------------------------------------------------------
-  Stream<({double lat, double lng})?> _ecouterDernierePosition() {
+  Stream<({double lat, double lng, DateTime eventTime})?> _ecouterDernierePosition() {
     final procheUid = widget.proche['uid'] as String;
     final depuis = DateTime.now().subtract(const Duration(hours: 72));
 
@@ -602,8 +705,9 @@ class _CarteProcheState extends State<_CarteProche> {
         final data = doc.data();
         final lat = data['lat'] as num?;
         final lng = data['lng'] as num?;
-        if (lat != null && lng != null) {
-          return (lat: lat.toDouble(), lng: lng.toDouble());
+        final timestamp = data['timestamp'] as Timestamp?;
+        if (lat != null && lng != null && timestamp != null) {
+          return (lat: lat.toDouble(), lng: lng.toDouble(), eventTime: timestamp.toDate());
         }
       }
       return null;
@@ -637,14 +741,64 @@ class _CarteProcheState extends State<_CarteProche> {
   void _basculerExpansion() {
     setState(() {
       _etendu = !_etendu;
-      if (_etendu) {
-        _streamPosition = _ecouterDernierePosition();
-        _streamHistorique = _ecouterHistoriqueChutes();
-      } else {
-        _streamPosition = null;
-        _streamHistorique = null;
-      }
+      // _streamPosition reste actif en permanence (voir initState) — seul
+      // l'historique des chutes est chargé à la demande
+      _streamHistorique = _etendu ? _ecouterHistoriqueChutes() : null;
     });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Décide si la position "batterie faible" (users/{uid}.lastKnown*) doit
+  // prendre le pas sur celle du dernier fallEvent, et prépare l'avertissement
+  // rouge associé. Une seule règle avec sous-cas, plutôt que 3 branches
+  // indépendantes :
+  //   - phoneBatteryLow == true ET (pas de fallEvent récent OU lastKnownAt
+  //     plus récent que eventTime) → la position batterie gagne
+  //     - avec lastKnownLat/Lng → carte centrée dessus (marqueur distinct,
+  //       orange, pour ne pas la confondre avec une position de chute)
+  //     - sans lastKnownLat/Lng (consentement refusé à ce moment-là) →
+  //       avertissement seul, pas de carte
+  //   - sinon → comportement actuel inchangé (position du fallEvent, ou
+  //     rien si aucune des deux n'est disponible)
+  // ---------------------------------------------------------------------------
+  ({({double lat, double lng, bool depuisBatterie})? position, String? avertissementBatterie})
+      _resoudreEtatLocalisation(
+    ({double lat, double lng, DateTime eventTime})? positionChute,
+    Map<String, dynamic>? profil,
+  ) {
+    final phoneBatteryLow = profil?['phoneBatteryLow'] == true;
+    final lastKnownLat = profil?['lastKnownLat'] as num?;
+    final lastKnownLng = profil?['lastKnownLng'] as num?;
+    final lastKnownAt = profil?['lastKnownAt'] as Timestamp?;
+
+    final batteryWins = phoneBatteryLow &&
+        (positionChute == null ||
+            (lastKnownAt != null && lastKnownAt.toDate().isAfter(positionChute.eventTime)));
+
+    if (!batteryWins) {
+      final position = positionChute == null
+          ? null
+          : (lat: positionChute.lat, lng: positionChute.lng, depuisBatterie: false);
+      return (position: position, avertissementBatterie: null);
+    }
+
+    final nom = widget.proche['nom'] as String? ?? 'Proche';
+    final prenom = nom.split(' ').first;
+
+    if (lastKnownLat == null || lastKnownLng == null) {
+      return (
+        position: null,
+        avertissementBatterie: 'Téléphone de $prenom déchargé — position non disponible',
+      );
+    }
+
+    final dateFormatee = lastKnownAt != null ? _formaterDate(lastKnownAt.toDate()) : null;
+    return (
+      position: (lat: lastKnownLat.toDouble(), lng: lastKnownLng.toDouble(), depuisBatterie: true),
+      avertissementBatterie: dateFormatee != null
+          ? 'Téléphone de $prenom déchargé — dernière position enregistrée le $dateFormatee'
+          : 'Téléphone de $prenom déchargé — position non disponible',
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -739,12 +893,203 @@ class _CarteProcheState extends State<_CarteProche> {
     );
   }
 
+  // ---------------------------------------------------------------------------
+  // Dialogue affiché quand aucun numéro n'est disponible pour ce proche —
+  // permet à l'aidant d'en attribuer un localement (voir _resoudreNumero)
+  // ---------------------------------------------------------------------------
+  Future<void> _proposerNumeroLocal() async {
+    final aidantUid = FirebaseAuth.instance.currentUser?.uid;
+    if (aidantUid == null) return;
+    final procheUid = widget.proche['uid'] as String;
+
+    final controleur = TextEditingController();
+    final formKey = GlobalKey<FormState>();
+
+    await showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Numéro non renseigné'),
+        content: Form(
+          key: formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Cet utilisateur n\'a pas renseigné de numéro. '
+                'Si vous souhaitez en lier un :',
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: controleur,
+                keyboardType: TextInputType.phone,
+                decoration: const InputDecoration(labelText: 'Numéro'),
+                validator: validerTelephone,
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Annuler'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              if (!formKey.currentState!.validate()) return;
+              final numero = controleur.text.trim();
+              Navigator.pop(dialogContext);
+              await _linkCodeService.definirTelephoneLocal(
+                followerUid: aidantUid,
+                followedUid: procheUid,
+                telephone: numero,
+              );
+            },
+            child: const Text('Enregistrer'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Ouvre Google Maps en mode itinéraire (app installée si disponible, sinon
+  // navigateur), prêt à démarrer la navigation vers le point de localisation
+  // reçu. Format universel "dir" (fonctionne Android/iOS), contrairement à
+  // google.navigation: qui est Android uniquement.
+  // ---------------------------------------------------------------------------
+  Future<void> _ouvrirDansMaps(double lat, double lng) async {
+    final uri = Uri.parse(
+      'https://www.google.com/maps/dir/?api=1&destination=$lat,$lng&travelmode=driving',
+    );
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Section "Localisation" de la fiche dépliée — position du dernier
+  // fallEvent (marqueur rouge, comme avant) ou position de secours batterie
+  // faible (marqueur orange distinct, voir _resoudreEtatLocalisation), ou
+  // avertissement seul sans carte si aucune position n'est disponible.
+  // ---------------------------------------------------------------------------
+  Widget _construireSectionLocalisation(
+    ({({double lat, double lng, bool depuisBatterie})? position, String? avertissementBatterie})
+        etatLocalisation,
+  ) {
+    final avertissement = etatLocalisation.avertissementBatterie;
+    final position = etatLocalisation.position;
+
+    if (position == null) {
+      return Text(
+        avertissement ?? 'Aucune localisation récente partagée.',
+        style: TextStyle(
+          color: avertissement != null ? Colors.red : Colors.grey,
+          fontWeight: avertissement != null ? FontWeight.bold : FontWeight.normal,
+        ),
+      );
+    }
+
+    final couleurMarqueur = position.depuisBatterie ? Colors.orange : Colors.red;
+    final iconeMarqueur = position.depuisBatterie ? Icons.battery_alert : Icons.location_pin;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (avertissement != null) ...[
+          Text(
+            avertissement,
+            style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 8),
+        ],
+        GestureDetector(
+          onTap: () => _ouvrirDansMaps(position.lat, position.lng),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: SizedBox(
+              height: 180,
+              child: IgnorePointer(
+                // La carte elle-même ne doit pas intercepter le tap (pas de
+                // pan/zoom souhaité ici) — tap = ouverture directe dans Maps
+                child: FlutterMap(
+                  options: MapOptions(
+                    initialCenter: LatLng(position.lat, position.lng),
+                    initialZoom: 15,
+                  ),
+                  children: [
+                    TileLayer(
+                      urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                      userAgentPackageName: 'com.necklife.app',
+                    ),
+                    MarkerLayer(markers: [
+                      Marker(
+                        point: LatLng(position.lat, position.lng),
+                        width: 40,
+                        height: 40,
+                        child: Icon(iconeMarqueur, color: couleurMarqueur, size: 40),
+                      ),
+                    ]),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        // Bouton explicite en plus du tap sur la carte — à retrouver
+        // rapidement en situation d'urgence
+        OutlinedButton.icon(
+          onPressed: () => _ouvrirDansMaps(position.lat, position.lng),
+          icon: const Icon(Icons.directions),
+          label: const Text('Itinéraire'),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: _streamProfilProche,
+      builder: (context, snapshotProfil) {
+        return StreamBuilder<Map<String, dynamic>?>(
+          stream: _streamContactLocal,
+          builder: (context, snapshotContactLocal) {
+            return StreamBuilder<({double lat, double lng, DateTime eventTime})?>(
+              stream: _streamPosition,
+              builder: (context, snapshotPosition) {
+                final profilData = snapshotProfil.data?.data();
+                final resolution = _resoudreNumeroProche(profilData, snapshotContactLocal.data);
+                final etatLocalisation = _resoudreEtatLocalisation(
+                  snapshotPosition.data,
+                  profilData,
+                );
+                return _construireCarte(resolution, etatLocalisation);
+              },
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _construireCarte(
+    ({String? numero, String source}) resolution,
+    ({({double lat, double lng, bool depuisBatterie})? position, String? avertissementBatterie})
+        etatLocalisation,
+  ) {
+    final numero = resolution.numero;
+    // Vert = numéro du profil du proche, bleu = numéro attribué localement
+    // par cet aidant, orange = aucun numéro disponible (tap = pop-up de saisie)
+    final couleurAppel = switch (resolution.source) {
+      'profil' => Colors.green,
+      'local' => Colors.blue,
+      _ => Colors.orange,
+    };
     final chuteActive = widget.proche['chuteActive'] == true;
     final nom = widget.proche['nom'] as String? ?? 'Proche';
-    // Numéro de test tant qu'aucun numéro n'est stocké pour ce proche
-    final numero = widget.proche['telephone'] as String? ?? '0600000000';
+    final avertissementBatterie = etatLocalisation.avertissementBatterie;
 
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
@@ -754,16 +1099,31 @@ class _CarteProcheState extends State<_CarteProche> {
           ListTile(
             leading: Icon(Icons.person, color: chuteActive ? Colors.red : const Color(0xFFF68FFA)),
             title: Text(nom, style: const TextStyle(fontWeight: FontWeight.bold)),
-            subtitle: Text(
-              chuteActive ? 'CHUTE DÉTECTÉE' : 'Statut du collier : non disponible',
-              style: TextStyle(
-                color: chuteActive ? Colors.red : Colors.grey,
-                fontWeight: chuteActive ? FontWeight.bold : FontWeight.normal,
-              ),
+            // Colonne plutôt qu'un Text unique : la chute active ET
+            // l'avertissement batterie peuvent être vrais en même temps, et
+            // aucun des deux ne doit masquer l'autre
+            subtitle: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  chuteActive ? 'CHUTE DÉTECTÉE' : 'Statut du collier : non disponible',
+                  style: TextStyle(
+                    color: chuteActive ? Colors.red : Colors.grey,
+                    fontWeight: chuteActive ? FontWeight.bold : FontWeight.normal,
+                  ),
+                ),
+                if (avertissementBatterie != null)
+                  Text(
+                    avertissementBatterie,
+                    style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold),
+                  ),
+              ],
             ),
             trailing: IconButton(
-              icon: const Icon(Icons.call, color: Colors.green),
-              onPressed: () => widget.onAppeler(numero),
+              icon: Icon(Icons.call, color: couleurAppel),
+              onPressed: numero != null
+                  ? () => widget.onAppeler(numero)
+                  : _proposerNumeroLocal,
             ),
             onTap: _basculerExpansion,
           ),
@@ -776,51 +1136,7 @@ class _CarteProcheState extends State<_CarteProche> {
                   const Divider(),
                   const Text('Localisation', style: TextStyle(fontWeight: FontWeight.bold)),
                   const SizedBox(height: 4),
-                  StreamBuilder<({double lat, double lng})?>(
-                    stream: _streamPosition,
-                    builder: (context, snapshot) {
-                      if (snapshot.connectionState == ConnectionState.waiting) {
-                        return const Padding(
-                          padding: EdgeInsets.symmetric(vertical: 8),
-                          child: Center(child: CircularProgressIndicator()),
-                        );
-                      }
-                      final position = snapshot.data;
-                      if (position == null) {
-                        return const Text(
-                          'Aucune localisation récente partagée.',
-                          style: TextStyle(color: Colors.grey),
-                        );
-                      }
-                      return ClipRRect(
-                        borderRadius: BorderRadius.circular(8),
-                        child: SizedBox(
-                          height: 180,
-                          child: FlutterMap(
-                            options: MapOptions(
-                              initialCenter: LatLng(position.lat, position.lng),
-                              initialZoom: 15,
-                            ),
-                            children: [
-                              TileLayer(
-                                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                                userAgentPackageName: 'com.necklife.app',
-                              ),
-                              MarkerLayer(markers: [
-                                Marker(
-                                  point: LatLng(position.lat, position.lng),
-                                  width: 40,
-                                  height: 40,
-                                  child: const Icon(Icons.location_pin,
-                                      color: Colors.red, size: 40),
-                                ),
-                              ]),
-                            ],
-                          ),
-                        ),
-                      );
-                    },
-                  ),
+                  _construireSectionLocalisation(etatLocalisation),
                   const SizedBox(height: 12),
                   const Text('Historique de chutes', style: TextStyle(fontWeight: FontWeight.bold)),
                   const SizedBox(height: 4),

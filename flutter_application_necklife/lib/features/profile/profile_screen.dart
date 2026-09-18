@@ -12,6 +12,7 @@ import '../../core/auth/auth_service.dart';
 import '../../core/auth/link_code_service.dart';
 import '../../core/validation/text_validators.dart';
 import '../../shared/widgets/necklife_button.dart';
+import 'manage_links_screen.dart';
 
 // Modèle d'un contact d'urgence
 class _ContactUrgence {
@@ -242,6 +243,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final nouveauTelephone = _controleurTelephoneEdit.text.trim();
     final nouvelEmail = _controleurEmailEdit.text.trim();
     final nouveauMotDePasse = _controleurNouveauMotDePasse.text;
+    // N'estampille la date de modif. que si le numéro a réellement changé —
+    // sert à départager avec le numéro local attribué par un aidant (voir
+    // définition de priorité "dernier qui modifie gagne" dans home_screen.dart)
+    final telephoneModifie = nouveauTelephone != (_telephone ?? '');
 
     final emailModifie = nouvelEmail != (user.email ?? '');
     final motDePasseModifie = nouveauMotDePasse.isNotEmpty;
@@ -262,7 +267,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
       await user.updateDisplayName(nouveauNom);
       await _firestore.collection('users').doc(user.uid).set(
-        {'nom': nouveauNom, 'telephone': nouveauTelephone},
+        {
+          'nom': nouveauNom,
+          'telephone': nouveauTelephone,
+          if (telephoneModifie) 'telephoneModifieLe': FieldValue.serverTimestamp(),
+        },
         SetOptions(merge: true),
       );
 
@@ -610,6 +619,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
                 const SizedBox(height: 24),
 
+                // --- Gestion des liaisons avec les proches suivis ---
+                NecklifeButton(
+                  label: 'Modifier les liaisons',
+                  icone: Icons.people_outline,
+                  couleur: Colors.grey[700]!,
+                  onPressed: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const ManageLinksScreen()),
+                  ),
+                ),
+
+                const SizedBox(height: 12),
+
                 // --- Bouton déconnexion ---
                 NecklifeButton(
                   label: 'Se déconnecter',
@@ -669,8 +691,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
               TextFormField(
                 controller: _controleurTelephoneEdit,
                 keyboardType: TextInputType.phone,
-                decoration: const InputDecoration(labelText: 'Téléphone'),
-                validator: validerTelephone,
+                decoration: const InputDecoration(
+                  labelText: 'Téléphone',
+                  hintText: 'Optionnel',
+                ),
+                validator: validerTelephoneOptionnel,
               ),
               const SizedBox(height: 12),
               TextFormField(

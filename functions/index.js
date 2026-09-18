@@ -46,6 +46,17 @@ exports.notifierChuteDetectee = onDocumentCreated("fallEvents/{eventId}", async 
         title: "Alerte chute",
         body: `${nomPorteur} a peut-être fait une chute.`,
       },
+      // Priorité haute + canal dédié : nécessaire pour un affichage fiable
+      // côté Android quand l'app est en arrière-plan ou fermée (voir
+      // firebaseMessagingBackgroundHandler dans main.dart et le canal
+      // "necklife_alertes" déclaré dans AndroidManifest.xml)
+      android: {
+        priority: "high",
+        notification: {
+          channelId: "necklife_alertes",
+          sound: "default",
+        },
+      },
     });
   }));
 });

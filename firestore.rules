@@ -92,8 +92,10 @@ service cloud.firestore {
     // - Les deux parties du lien (follower et followed) peuvent le lire
     // - Seul le follower peut créer une demande, à l'état 'pending', pour
     //   lui-même
-    // - Seul le followed peut l'accepter (passage à 'accepted') ou la
-    //   supprimer (refus)
+    // - Seul le followed peut l'accepter (passage à 'accepted')
+    // - Le followed peut supprimer le lien (refus), et le follower aussi
+    //   (retrait depuis la page "Modifier les liaisons", voir
+    //   manage_links_screen.dart)
     // -------------------------------------------------------------------------
     match /links/{linkId} {
       allow read: if estAuthentifie() &&
@@ -108,7 +110,33 @@ service cloud.firestore {
                       resource.data.followedUid == request.auth.uid &&
                       request.resource.data.status == 'accepted';
 
-      allow delete: if estAuthentifie() && resource.data.followedUid == request.auth.uid;
+      allow delete: if estAuthentifie() &&
+                      (resource.data.followedUid == request.auth.uid ||
+                       resource.data.followerUid == request.auth.uid);
+    }
+
+    // -------------------------------------------------------------------------
+    // Collection : contactsLocaux/{contactId}
+    // Numéro de téléphone attribué localement par un aidant à un proche
+    // suivi (voir link_code_service.dart). ID déterministe
+    // {followerUid}_{followedUid}, même schéma que links. Entièrement
+    // possédé par le follower (l'aidant) : ni le proche concerné, ni les
+    // autres aidants qui le suivent, n'y ont accès — c'est précisément le
+    // but (numéro "local", visible seulement par celui qui l'a saisi).
+    // -------------------------------------------------------------------------
+    match /contactsLocaux/{contactId} {
+      // resource est `null` tant que le document n'existe pas encore (avant
+      // le tout premier definirTelephoneLocal() de cet aidant pour ce
+      // proche) — dérérencer resource.data sans ce garde-fou fait échouer
+      // en permission-denied le .snapshots() souscrit par ecouterContactLocal()
+      // dès l'abonnement initial, et un listener Firestore refusé ne se
+      // réabonne jamais tout seul même une fois le document créé.
+      allow read: if estAuthentifie() &&
+                    (resource == null || resource.data.followerUid == request.auth.uid);
+      allow update, delete: if estAuthentifie() &&
+                               resource.data.followerUid == request.auth.uid;
+      allow create: if estAuthentifie() &&
+                      request.resource.data.followerUid == request.auth.uid;
     }
 
     // -------------------------------------------------------------------------
