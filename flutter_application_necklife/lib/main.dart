@@ -9,6 +9,7 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 
 import 'core/auth/auth_service.dart';
+import 'core/battery/battery_service.dart';
 import 'core/notifications/push_service.dart';
 import 'core/notifications/vibration_service.dart';
 import 'features/auth/email_verification_screen.dart';
@@ -111,6 +112,9 @@ class PortailAuthentification extends StatelessWidget {
 
         // Demande la permission de notification et sauvegarde le token FCM
         PushService().initialiser();
+        // Surveillance batterie faible → position de secours (voir
+        // battery_service.dart) ; idempotent, sans effet si déjà démarrée
+        BatteryService.instance.demarrerSurveillance();
         return const RacineNavigation();
       },
     );

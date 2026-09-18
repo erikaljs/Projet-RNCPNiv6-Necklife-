@@ -50,6 +50,10 @@ dependencies:
   # Vibration distincte à la réception d'une alerte de chute
   vibration: ^2.0.0
 
+  # Surveillance du niveau de batterie du téléphone porteur (position de
+  # secours en cas de batterie faible, voir battery_service.dart)
+  battery_plus: ^6.0.0
+
   # HTTP client avec intercepteurs JWT
   dio: ^5.8.0+1
 
