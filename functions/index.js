@@ -3,8 +3,9 @@
 // de chute est enregistré dans fallEvents
 
 const {onDocumentCreated} = require("firebase-functions/v2/firestore");
+const {onCall, HttpsError} = require("firebase-functions/v2/https");
 const {initializeApp} = require("firebase-admin/app");
-const {getFirestore} = require("firebase-admin/firestore");
+const {getFirestore, Timestamp, FieldValue} = require("firebase-admin/firestore");
 const {getMessaging} = require("firebase-admin/messaging");
 
 initializeApp();
@@ -59,4 +60,64 @@ exports.notifierChuteDetectee = onDocumentCreated("fallEvents/{eventId}", async 
       },
     });
   }));
+});
+
+// Agrège les événements de chute des 7 derniers jours de l'utilisateur
+// appelant en un résumé chiffré (compétence RGPD : donnée dérivée calculée
+// côté serveur à partir de données déjà consenties par l'utilisateur, jamais
+// de nouvelle collecte). Le résultat est à la fois persisté (weeklyStats/{uid},
+// pour un historique et une lecture par un aidant suivi) et renvoyé
+// directement dans la réponse, pour un affichage immédiat côté app.
+exports.genererResumeHebdomadaire = onCall(async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) {
+    throw new HttpsError("unauthenticated", "Authentification requise.");
+  }
+
+  const firestore = getFirestore();
+  const maintenant = new Date();
+  const periodeDebut = new Date(maintenant.getTime() - 7 * 24 * 60 * 60 * 1000);
+
+  const snapshot = await firestore
+      .collection("fallEvents")
+      .where("uid", "==", uid)
+      .where("timestamp", ">=", Timestamp.fromDate(periodeDebut))
+      .where("timestamp", "<=", Timestamp.fromDate(maintenant))
+      .get();
+
+  let nbFausses = 0;
+  let nbReelles = 0;
+  let nbEnAttente = 0;
+
+  snapshot.forEach((doc) => {
+    const statut = doc.data().statut || "en_attente";
+    if (statut === "fausse_alerte") nbFausses++;
+    else if (statut === "chute_reelle") nbReelles++;
+    else nbEnAttente++;
+  });
+
+  const resume = {
+    nbTotal: snapshot.size,
+    nbFausses,
+    nbReelles,
+    nbEnAttente,
+  };
+
+  await firestore.collection("weeklyStats").doc(uid).set(
+      {
+        ...resume,
+        periodeDebut: Timestamp.fromDate(periodeDebut),
+        periodeFin: Timestamp.fromDate(maintenant),
+        calculeLe: FieldValue.serverTimestamp(),
+      },
+      {merge: true},
+  );
+
+  // periodeDebut/periodeFin renvoyées en ISO : le protocole des Cloud
+  // Functions callable ne sait pas sérialiser un Timestamp Firestore.
+  return {
+    ...resume,
+    periodeDebut: periodeDebut.toISOString(),
+    periodeFin: maintenant.toISOString(),
+  };
 });

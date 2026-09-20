@@ -161,6 +161,22 @@ service cloud.firestore {
     }
 
     // -------------------------------------------------------------------------
+    // Collection : weeklyStats/{uid}
+    // Résumé hebdomadaire agrégé (nombre de chutes/fausses alertes sur 7
+    // jours), calculé par la Cloud Function genererResumeHebdomadaire à
+    // partir de fallEvents — donnée dérivée, pas de nouvelle collecte (RGPD).
+    // - Propriétaire : lecture seule
+    // - Un proche avec un lien accepté vers ce uid : lecture seule (comme
+    //   pour fallEvents, utile pour le suivi par un aidant)
+    // - Écriture : jamais côté client, uniquement par la Cloud Function via
+    //   le SDK admin (qui ignore ces règles)
+    // -------------------------------------------------------------------------
+    match /weeklyStats/{uid} {
+      allow read: if estAuthentifie() && (estProprietaire(uid) || estSuiviAccepte(uid));
+      allow write: if false;
+    }
+
+    // -------------------------------------------------------------------------
     // Règle de sécurité par défaut : bloquer tout accès non explicitement autorisé
     // -------------------------------------------------------------------------
     match /{document=**} {
