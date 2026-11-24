@@ -5,10 +5,13 @@
 
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 
 import 'core/auth/auth_service.dart';
+import 'core/battery/battery_service.dart';
 import 'core/notifications/push_service.dart';
+import 'core/notifications/vibration_service.dart';
 import 'features/auth/email_verification_screen.dart';
 import 'features/auth/login_screen.dart';
 import 'features/home/home_screen.dart';
@@ -20,20 +23,35 @@ const Color couleurPrimaire = Color(0xFFF68FFA); // lavande
 const Color couleurAlerte   = Color(0xFFD32F2F); // rouge SOS
 const Color couleurFond     = Color(0xFFF5F5F5);
 
+const FirebaseOptions optionsFirebase = FirebaseOptions(
+  apiKey: "AIzaSyA25-ssiWlqHvkTJRtxiwWFx7IkEOIVHEc",
+  authDomain: "necklife-project.firebaseapp.com",
+  projectId: "necklife-project",
+  storageBucket: "necklife-project.firebasestorage.app",
+  messagingSenderId: "596813751148",
+  appId: "1:596813751148:web:a7fd7fb6af3508fd978949",
+);
+
+// ---------------------------------------------------------------------------
+// Handler des messages FCM reçus app fermée/arrière-plan (Android uniquement
+// pour l'instant, voir contexte iOS/APNs). S'exécute dans un isolate séparé
+// depuis zéro : Firebase doit y être réinitialisé avant tout usage.
+// L'annotation @pragma est requise pour que le handler reste accessible
+// après le tree-shaking en mode release.
+// ---------------------------------------------------------------------------
+@pragma('vm:entry-point')
+Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  await Firebase.initializeApp(options: optionsFirebase);
+  await declencherVibrationAlerte();
+}
+
 Future<void> main() async {
   // Initialisation obligatoire avant tout appel Firebase
   WidgetsFlutterBinding.ensureInitialized();
 
-  await Firebase.initializeApp(
-    options: const FirebaseOptions(
-      apiKey: "AIzaSyA25-ssiWlqHvkTJRtxiwWFx7IkEOIVHEc",
-      authDomain: "necklife-project.firebaseapp.com",
-      projectId: "necklife-project",
-      storageBucket: "necklife-project.firebasestorage.app",
-      messagingSenderId: "596813751148",
-      appId: "1:596813751148:web:a7fd7fb6af3508fd978949",
-    ),
-  );
+  await Firebase.initializeApp(options: optionsFirebase);
+
+  FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
 
   runApp(const NeckLifeApp());
 }
@@ -94,6 +112,9 @@ class PortailAuthentification extends StatelessWidget {
 
         // Demande la permission de notification et sauvegarde le token FCM
         PushService().initialiser();
+        // Surveillance batterie faible → position de secours (voir
+        // battery_service.dart) ; idempotent, sans effet si déjà démarrée
+        BatteryService.instance.demarrerSurveillance();
         return const RacineNavigation();
       },
     );

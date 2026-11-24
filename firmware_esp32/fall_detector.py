@@ -1,12 +1,11 @@
 """
-NeckLife - Detecteur de chute
-Module utilise pour le calcul de detection de chute (dossier RNCP).
+Module utilisé pour le calcul de detection de chute (voir dossier RNCP).
 
 Algorithme :
   1. Chute libre = magnitude de l'acceleration en dessous du seuil SEUIL_CHUTE_LIBRE
   2. Impact = magnitude au-dessus du seuil SEUIL_IMPACT, survenant dans la fenetre
      de temps (fenetre_ms) suivant la chute libre
-  -> Si les deux surviennent dans la fenetre : ALERTE (chute confirmee)
+  -> Si les deux surviennent dans la fenetre = ALERTE (chute confirmee)
 
 Unites : les valeurs ax, ay, az sont attendues en m/s^2 (gravite au repos = 9.81)
 """
@@ -14,8 +13,8 @@ Unites : les valeurs ax, ay, az sont attendues en m/s^2 (gravite au repos = 9.81
 import time
 import math
 
-SEUIL_CHUTE_LIBRE = 0.3  # m/s^2 - en dessous = quasi apesanteur (chute libre)
-SEUIL_IMPACT = 3.0       # m/s^2 - au-dessus = choc / impact
+SEUIL_CHUTE_LIBRE = 3.0  # m/s^2 en dessous = quasi apesanteur (chute libre)
+SEUIL_IMPACT = 15.0      # m/s^2 au-dessus = choc / impact
 
 
 def calculate_vector_magnitude(ax, ay, az):
@@ -72,7 +71,7 @@ class FallDetector:
 
     def reinitialiser(self):
         """Remet le detecteur en veille. A appeler apres traitement de l'alerte
-        (typiquement quand l'utilisateur coupe le buzzer)."""
+        (typiquement quand l'utilisateur coupe le buzzer)"""
         self.etat = self.ETAT_IDLE
         self._timestamp_chute = None
 

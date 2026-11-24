@@ -14,8 +14,8 @@ Unites : les valeurs ax, ay, az sont attendues en m/s^2 (gravite au repos = 9.81
 import time
 import math
 
-SEUIL_CHUTE_LIBRE = 0.3  # m/s^2 - en dessous = quasi apesanteur (chute libre)
-SEUIL_IMPACT = 3.0       # m/s^2 - au-dessus = choc / impact
+SEUIL_CHUTE_LIBRE = 3.0  # m/s^2 - en dessous = quasi apesanteur (chute libre)
+SEUIL_IMPACT = 15.0      # m/s^2 - au-dessus = choc / impact
 
 
 def calculate_vector_magnitude(ax, ay, az):

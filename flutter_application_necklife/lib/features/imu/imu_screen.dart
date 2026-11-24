@@ -9,6 +9,7 @@ import 'dart:async';
 import 'dart:math';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
@@ -30,6 +31,11 @@ class _ImuScreenState extends State<ImuScreen> {
   // continu. En attendant une caractéristique BLE de streaming, on simule
   // des données de démonstration pour visualiser le graphique.
   Timer? _timerSimulation;
+
+  // Résumé hebdomadaire agrégé (genererResumeHebdomadaire) : null tant qu'il
+  // n'a pas été demandé au moins une fois par l'utilisateur.
+  Map<String, dynamic>? _resumeHebdo;
+  bool _chargementResume = false;
 
   @override
   void initState() {
@@ -61,6 +67,28 @@ class _ImuScreenState extends State<ImuScreen> {
     await _firestore.collection('fallEvents').doc(docId).update({'statut': statut});
   }
 
+  // ---------------------------------------------------------------------------
+  // Demande à la Cloud Function le résumé agrégé des 7 derniers jours
+  // ---------------------------------------------------------------------------
+  Future<void> _genererResumeHebdomadaire() async {
+    setState(() => _chargementResume = true);
+    try {
+      final callable = FirebaseFunctions.instance.httpsCallable('genererResumeHebdomadaire');
+      final resultat = await callable.call();
+      if (!mounted) return;
+      setState(() {
+        _resumeHebdo = Map<String, dynamic>.from(resultat.data as Map);
+      });
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Impossible de générer le résumé hebdomadaire. Réessayez plus tard.')),
+      );
+    } finally {
+      if (mounted) setState(() => _chargementResume = false);
+    }
+  }
+
   String _formaterDate(DateTime dt) {
     String deuxChiffres(int n) => n.toString().padLeft(2, '0');
     return '${deuxChiffres(dt.day)}/${deuxChiffres(dt.month)} '
@@ -84,6 +112,31 @@ class _ImuScreenState extends State<ImuScreen> {
             height: 200,
             child: _GraphiqueImu(donnees: _historiqueImu),
           ),
+          const SizedBox(height: 24),
+          OutlinedButton.icon(
+            onPressed: _chargementResume ? null : _genererResumeHebdomadaire,
+            icon: _chargementResume
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.summarize_outlined),
+            label: const Text('Voir mon résumé hebdomadaire'),
+          ),
+          if (_resumeHebdo != null) ...[
+            const SizedBox(height: 8),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Text(
+                  '${_resumeHebdo!['nbTotal']} alertes cette semaine — '
+                  '${_resumeHebdo!['nbFausses']} fausses alertes, '
+                  '${_resumeHebdo!['nbReelles']} chutes réelles',
+                ),
+              ),
+            ),
+          ],
           const SizedBox(height: 24),
           const Text('Historique de mes chutes (72 dernières heures)',
               style: TextStyle(fontWeight: FontWeight.bold)),

@@ -33,3 +33,15 @@ String? validerTelephone(String? valeur) {
   }
   return null;
 }
+
+// ---------------------------------------------------------------------------
+// Valide un numéro de téléphone optionnel : un champ vide est accepté,
+// sinon le même format que validerTelephone s'applique
+// ---------------------------------------------------------------------------
+String? validerTelephoneOptionnel(String? valeur) {
+  if (valeur == null || valeur.trim().isEmpty) return null;
+  if (!_regexTelephone.hasMatch(valeur.trim())) {
+    return 'Chiffres uniquement ("+" autorisé en début)';
+  }
+  return null;
+}
