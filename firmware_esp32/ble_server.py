@@ -12,17 +12,16 @@ import bluetooth
 from micropython import const
 import struct
 
-# --- Evenements IRQ BLE ---
+# event d interruptions IRQ
 _IRQ_CENTRAL_CONNECT = const(1)
 _IRQ_CENTRAL_DISCONNECT = const(2)
 _IRQ_GATTS_WRITE = const(3)
 
-# --- UUID (doivent correspondre exactement a ble_manager.dart) ---
+# les UUID (doivent correspondre exactement a ble_manager.dart)
 _UUID_SERVICE_NECKLIFE = bluetooth.UUID("12345678-1234-1234-1234-123456789abc")
 _UUID_CARAC_ALERTE = bluetooth.UUID("12345678-1234-1234-1234-123456789abd")
 _UUID_CARAC_COMMANDES = bluetooth.UUID("12345678-1234-1234-1234-123456789abe")
 
-# --- Flags des caracteristiques (norme BLE GATT) ---
 _FLAG_READ = const(0x0002)
 _FLAG_WRITE = const(0x0008)
 _FLAG_NOTIFY = const(0x0010)
